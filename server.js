@@ -56,12 +56,27 @@ function sendSms(phone, text, callback) {
     });
 }
 
-// -------------------- CORS --------------------
+import cors from "cors"; // or require("cors")
+
 const allowedOrigins = [
-  'http://localhost:3000',
-  'http://localhost:5000',
-  // Add your production/ngrok URL(s) here
+  "http://localhost:3000", // keep for local dev
+  "https://castle-consulting-firm-messaging.onrender.com",
 ];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // allow non-browser requests (Twilio, GAS, server-to-server)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error("CORS blocked origin: " + origin));
+  },
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
 
 const app = express();
 const server = http.createServer(app);
@@ -199,4 +214,5 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
+
 
