@@ -61,7 +61,7 @@ app.use(
 );
 
 // ✅ Fixes preflight OPTIONS issue
-app.options("/*", cors());
+app.options(/.*/, cors());
 
 // -------------------- BODY PARSERS --------------------
 // React/API uses JSON
@@ -242,4 +242,5 @@ const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
