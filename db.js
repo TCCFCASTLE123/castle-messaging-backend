@@ -4,6 +4,18 @@ const path = require('path');
 
 // Make sure this matches the path where you want your SQLite DB file to be!
 const db = new sqlite3.Database(path.resolve(__dirname, 'database.sqlite'));
+// ---- One-time DB migration(s) ----
+db.run("ALTER TABLE clients ADD COLUMN language TEXT", (err) => {
+  if (err) {
+    // Ignore if the column already exists
+    if (!String(err.message).includes("duplicate column name")) {
+      console.error("DB migration failed (clients.language):", err.message);
+    }
+  } else {
+    console.log("DB migration applied: clients.language column added");
+  }
+});
+
 
 // Clients table
 db.run(`
@@ -42,3 +54,4 @@ db.run(`
 `);
 
 module.exports = db;
+
