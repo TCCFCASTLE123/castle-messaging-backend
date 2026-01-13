@@ -57,6 +57,19 @@ db.serialize(() => {
       password TEXT NOT NULL,
       role TEXT DEFAULT 'admin'
     )
+    // Statuses table (needed by /api/statuses)
+db.run(`
+  CREATE TABLE IF NOT EXISTS statuses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL
+  )
+`);
+
+// Optional: seed defaults so UI dropdown isn't empty
+db.run(`INSERT OR IGNORE INTO statuses (name) VALUES ('active')`);
+db.run(`INSERT OR IGNORE INTO statuses (name) VALUES ('inactive')`);
+db.run(`INSERT OR IGNORE INTO statuses (name) VALUES ('new')`);
+
   `);
 
   // Optional: log columns so you can SEE it worked in Render logs
@@ -68,3 +81,4 @@ db.serialize(() => {
 });
 
 module.exports = db;
+
