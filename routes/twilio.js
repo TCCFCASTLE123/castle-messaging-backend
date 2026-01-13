@@ -14,6 +14,27 @@ const twilioClient = twilio(
 const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
 
 /**
+ * Helper: find or create client by phone (phone is unique)
+ */
+function ensureClientByPhone(phone, defaultName, cb) {
+  db.get("SELECT id, name FROM clients WHERE phone = ?", [phone], (err, row) => {
+    if (err) return cb(err);
+
+    if (row && row.id) return cb(null, row.id);
+
+    db.run(
+      "INSERT INTO clients (name, phone, created_at, updated_at) VALUES (?, ?, datetime('now'), datetime('now'))",
+      [defaultName || "(New Lead)", phone],
+      function (insertErr) {
+        if (insertErr) return cb(insertErr);
+
+        cb(null, this.lastID);
+      }
+    );
+  });
+}
+
+/**
  * OUTBOUND SMS
  * Apps Script → Node → Twilio
  * POST /api/twilio/send
@@ -34,70 +55,54 @@ router.post("/send", (req, res) => {
     return res.status(400).json({ ok: false, error: "Invalid phone or text" });
   }
 
-  // Find or create client
-  db.get("SELECT id FROM clients WHERE phone = ?", [phone], (err, row) => {
-    if (err) return res.status(500).json({ ok: false, error: "DB lookup failed" });
+  ensureClientByPhone(phone, "(Appointment Lead)", (err, clientId) => {
+    if (err) {
+      console.error("❌ ensureClientByPhone failed:", err.message);
+      return res.status(500).json({ ok: false, error: "Client lookup/create failed" });
+    }
 
-    const ensureClient = (cb) => {
-      if (row && row.id) return cb(row.id);
+    // Send via Twilio
+    twilioClient.messages
+      .create({
+        from: twilioFrom,
+        to: phone,
+        body: text,
+      })
+      .then((message) => {
+        const ts = new Date().toISOString();
 
-      db.run(
-        "INSERT INTO clients (name, phone) VALUES (?, ?)",
-        ["(Appointment Lead)", phone],
-        function (insertErr) {
-          if (insertErr) return res.status(500).json({ ok: false, error: "Client create failed" });
-
-          if (req.io) {
-            req.io.emit("client_created", {
-              id: this.lastID,
-              name: "(Appointment Lead)",
-              phone,
-            });
-          }
-
-          cb(this.lastID);
-        }
-      );
-    };
-
-    ensureClient((clientId) => {
-      twilioClient.messages
-        .create({
-          from: twilioFrom,
-          to: phone,
-          body: text,
-        })
-        .then((message) => {
-          const ts = new Date().toISOString();
-
-          // Save outbound message
-          db.run(
-            "INSERT INTO messages (client_id, sender, text, direction, timestamp) VALUES (?, ?, ?, ?, ?)",
-            [clientId, "system", text, "outbound", ts],
-            function (msgErr) {
-              if (msgErr) return res.status(500).json({ ok: false, error: "Message save failed" });
-
-              // Emit to React realtime
-              if (req.io) {
-                req.io.emit("message", {
-                  client_id: clientId,
-                  sender: "system",
-                  text,
-                  direction: "outbound",
-                  timestamp: ts,
-                  twilio_sid: message.sid,
-                });
-              }
-
-              res.json({ ok: true, client_id: clientId });
+        // Save outbound message
+        db.run(
+          "INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id, phone) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          [clientId, "system", text, "outbound", ts, message.sid || null, phone],
+          function (msgErr) {
+            if (msgErr) {
+              console.error("❌ Outbound message save failed:", msgErr.message);
+              return res.status(500).json({ ok: false, error: "Message save failed" });
             }
-          );
-        })
-        .catch((twErr) => {
-          console.error("❌ Twilio send failed:", twErr);
-          res.status(500).json({ ok: false, error: "Twilio error" });
-        });
-    });
+
+            // Emit to React realtime
+            if (req.io) {
+              req.io.emit("message", {
+                id: this.lastID,
+                client_id: clientId,
+                phone,
+                sender: "system",
+                text,
+                direction: "outbound",
+                timestamp: ts,
+                twilio_sid: message.sid || null,
+              });
+            }
+
+            res.json({ ok: true, client_id: clientId, phone, sid: message.sid || null });
+          }
+        );
+      })
+      .catch((twErr) => {
+        console.error("❌ Twilio send failed:", twErr);
+        res.status(500).json({ ok: false, error: "Twilio error" });
+      });
   });
 });
 
@@ -107,65 +112,46 @@ router.post("/send", (req, res) => {
  * POST /api/twilio/inbound
  */
 router.post("/inbound", (req, res) => {
-  // ✅ Respond immediately with proper TwiML + content type (prevents retries)
+  // ✅ Respond immediately with TwiML (prevents retries)
   res.type("text/xml").status(200).send("<Response></Response>");
 
   try {
     const fromRaw = req.body.From;
     const text = (req.body.Body || "").trim();
-    const from = normalizePhone(fromRaw);
+    const sid = req.body.MessageSid || null;
 
-    if (!from || !text) return;
+    const phone = normalizePhone(fromRaw);
 
-    db.get("SELECT id FROM clients WHERE phone = ?", [from], (err, row) => {
-      if (err) return console.error("Inbound lookup failed:", err);
+    if (!phone || !text) return;
 
-      const ensureClient = (cb) => {
-        if (row && row.id) return cb(row.id);
+    ensureClientByPhone(phone, "(New Reply)", (err, clientId) => {
+      if (err) return console.error("❌ inbound ensureClientByPhone failed:", err.message);
 
-        db.run(
-          "INSERT INTO clients (name, phone) VALUES (?, ?)",
-          ["(New Reply)", from],
-          function (insertErr) {
-            if (insertErr) return console.error("Inbound client create failed:", insertErr);
+      const ts = new Date().toISOString();
 
-            if (req.io) {
-              req.io.emit("client_created", {
-                id: this.lastID,
-                name: "(New Reply)",
-                phone: from,
-              });
-            }
+      db.run(
+        "INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id, phone) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [clientId, "client", text, "inbound", ts, sid, phone],
+        function (msgErr) {
+          if (msgErr) return console.error("❌ Inbound message insert failed:", msgErr.message);
 
-            cb(this.lastID);
+          if (req.io) {
+            req.io.emit("message", {
+              id: this.lastID,
+              client_id: clientId,
+              phone,
+              sender: "client",
+              text,
+              direction: "inbound",
+              timestamp: ts,
+              twilio_sid: sid,
+            });
           }
-        );
-      };
-
-      ensureClient((clientId) => {
-        const ts = new Date().toISOString();
-
-        db.run(
-          "INSERT INTO messages (client_id, sender, text, direction, timestamp) VALUES (?, ?, ?, ?, ?)",
-          [clientId, "client", text, "inbound", ts],
-          function (msgErr) {
-            if (msgErr) return console.error("Inbound message insert failed:", msgErr);
-
-            if (req.io) {
-              req.io.emit("message", {
-                client_id: clientId,
-                sender: "client",
-                text,
-                direction: "inbound",
-                timestamp: ts,
-              });
-            }
-          }
-        );
-      });
+        }
+      );
     });
   } catch (e) {
-    console.error("Inbound webhook crashed:", e);
+    console.error("❌ Inbound webhook crashed:", e);
   }
 });
 
