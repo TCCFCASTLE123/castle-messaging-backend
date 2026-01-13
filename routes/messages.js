@@ -2,6 +2,16 @@ const express = require("express");
 const router = express.Router();
 const db = require("../db");
 const normalizePhone = require("../utils/normalizePhone");
+const twilio = require("twilio");
+
+/**
+ * Twilio client (server-side only)
+ */
+const twilioClient = twilio(
+  process.env.TWILIO_ACCOUNT_SID,
+  process.env.TWILIO_AUTH_TOKEN
+);
+const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
 
 /**
  * GET /api/messages
@@ -117,7 +127,7 @@ router.post("/note", (req, res) => {
             text,
             direction: "outbound",
             timestamp: ts,
-            twilio_sid: null,
+            external_id: null,
           });
         }
 
@@ -125,6 +135,127 @@ router.post("/note", (req, res) => {
       }
     );
   });
+});
+
+/**
+ * POST /api/messages/send
+ * Sends an outbound SMS via Twilio + saves to DB + emits socket event
+ *
+ * Body can be either:
+ *   { client_id, text, sender? }
+ * OR
+ *   { phone, text, sender? }
+ */
+router.post("/send", async (req, res) => {
+  try {
+    const text = (req.body.text || "").trim();
+    const sender = (req.body.sender || "agent").trim();
+
+    const clientIdRaw = req.body.client_id ? String(req.body.client_id).trim() : "";
+    const phoneRaw = req.body.phone ? String(req.body.phone).trim() : "";
+    const phoneNormalized = phoneRaw ? normalizePhone(phoneRaw) : "";
+
+    if (!text) {
+      return res.status(400).json({ ok: false, error: "Missing text" });
+    }
+
+    // Resolve client_id + phone
+    const resolveClient = () =>
+      new Promise((resolve, reject) => {
+        if (clientIdRaw) {
+          db.get(
+            "SELECT id, phone FROM clients WHERE id = ?",
+            [clientIdRaw],
+            (err, row) => {
+              if (err) return reject(err);
+              return resolve(row || null);
+            }
+          );
+        } else if (phoneNormalized) {
+          db.get(
+            "SELECT id, phone FROM clients WHERE phone = ?",
+            [phoneNormalized],
+            (err, row) => {
+              if (err) return reject(err);
+              return resolve(row || null);
+            }
+          );
+        } else {
+          resolve(null);
+        }
+      });
+
+    const clientRow = await resolveClient();
+
+    if (!clientRow) {
+      return res.status(404).json({
+        ok: false,
+        error: "Client not found (need client_id or phone that matches an existing client)",
+      });
+    }
+
+    const client_id = clientRow.id;
+    const to = normalizePhone(clientRow.phone);
+
+    if (!to) {
+      return res.status(400).json({ ok: false, error: "Client phone is invalid" });
+    }
+
+    // Send via Twilio
+    const sent = await twilioClient.messages.create({
+      from: twilioFrom,
+      to,
+      body: text,
+    });
+
+    const ts = new Date().toISOString();
+
+    // Save to DB
+    const insert = () =>
+      new Promise((resolve, reject) => {
+        db.run(
+          "INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id, phone) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          [client_id, sender, text, "outbound", ts, sent.sid, to],
+          function (err) {
+            if (err) return reject(err);
+            resolve(this.lastID);
+          }
+        );
+      });
+
+    const id = await insert();
+
+    // Emit real-time update
+    if (req.io) {
+      req.io.emit("message", {
+        id,
+        client_id,
+        phone: to,
+        sender,
+        text,
+        direction: "outbound",
+        timestamp: ts,
+        external_id: sent.sid,
+      });
+    }
+
+    return res.json({
+      ok: true,
+      message: {
+        id,
+        client_id,
+        phone: to,
+        sender,
+        text,
+        direction: "outbound",
+        timestamp: ts,
+        external_id: sent.sid,
+      },
+    });
+  } catch (err) {
+    console.error("❌ POST /api/messages/send failed:", err);
+    return res.status(500).json({ ok: false, error: "Server error sending message" });
+  }
 });
 
 module.exports = router;
