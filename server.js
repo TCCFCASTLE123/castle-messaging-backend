@@ -1,11 +1,6 @@
 /*******************************************************
- * Castle Consulting Messaging Backend — UPDATED server.js
- * Backend: Node + Express + Socket.io + Twilio + SQLite
- *
- * ✅ Scheduled messages DISABLED
- * ✅ Sheets webhook enabled
- * ✅ Socket.io stable
- * ✅ Twilio inbound/outbound intact
+ * Castle Consulting Messaging Backend — server.js
+ * Node + Express + Socket.io + Twilio + SQLite
  *******************************************************/
 
 require("dotenv").config();
@@ -15,7 +10,6 @@ const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
 const twilio = require("twilio");
-const normalizePhone = require("./utils/normalizePhone");
 
 // Routes
 const authRoutes = require("./routes/auth");
@@ -23,7 +17,7 @@ const messageRoutes = require("./routes/messages");
 const clientRoutes = require("./routes/clients");
 const statusRoutes = require("./routes/statuses");
 const templateRoutes = require("./routes/templates");
-const scheduledMessagesRoutes = require("./routes/scheduledMEssages"); // left mounted, not active
+const scheduledMessagesRoutes = require("./routes/scheduledMEssages");
 const twilioRoutes = require("./routes/twilio");
 const sheetsWebhookRoutes = require("./routes/sheetsWebhook");
 
@@ -34,16 +28,18 @@ const db = require("./db");
 const app = express();
 const server = http.createServer(app);
 
+// -------------------- LOGGING --------------------
+app.use((req, res, next) => {
+  console.log("➡️", req.method, req.url);
+  next();
+});
+
 // -------------------- CORS --------------------
 const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:5000",
   "https://castle-consulting-firm-messaging.onrender.com",
 ];
-app.use((req, res, next) => {
-  console.log("➡️", req.method, req.url);
-  next();
-});
 
 app.use(
   cors({
@@ -53,7 +49,7 @@ app.use(
       return callback(new Error("CORS blocked origin: " + origin));
     },
     credentials: true,
- methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "x-api-key", "x-webhook-key"],
   })
 );
@@ -80,12 +76,35 @@ app.use((req, res, next) => {
   next();
 });
 
+// -------------------- SAFE AUTO-MIGRATIONS --------------------
+function ensureClientColumns() {
+  db.all("PRAGMA table_info(clients)", [], (err, cols) => {
+    if (err) return console.error("❌ PRAGMA clients failed:", err.message);
+
+    const names = new Set((cols || []).map((c) => c.name));
+
+    const addCol = (name, type) => {
+      if (names.has(name)) return;
+      db.run(`ALTER TABLE clients ADD COLUMN ${name} ${type}`, [], (e) => {
+        if (e) console.error(`❌ ADD COLUMN clients.${name} failed:`, e.message);
+        else console.log(`✅ Added clients.${name}`);
+      });
+    };
+
+    // fields we want from Google Sheets
+    addCol("status_text", "TEXT");
+    addCol("case_group", "TEXT");
+    addCol("appt_setter", "TEXT");
+    addCol("ic", "TEXT");
+  });
+}
+ensureClientColumns();
+
 // -------------------- TWILIO SETUP --------------------
-const twilioClient = twilio(
+twilio(
   process.env.TWILIO_ACCOUNT_SID,
   process.env.TWILIO_AUTH_TOKEN
 );
-const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
 
 // -------------------- API ROUTES --------------------
 app.use("/api/auth", authRoutes);
@@ -93,7 +112,7 @@ app.use("/api/messages", messageRoutes);
 app.use("/api/clients", clientRoutes);
 app.use("/api/statuses", statusRoutes);
 app.use("/api/templates", templateRoutes);
-app.use("/api/scheduled_messages", scheduledMessagesRoutes); // routes still available
+app.use("/api/scheduled_messages", scheduledMessagesRoutes);
 app.use("/api/twilio", twilioRoutes);
 app.use("/api/sheets", sheetsWebhookRoutes);
 
@@ -107,17 +126,8 @@ io.on("connection", (socket) => {
   console.log("Socket.IO user connected:", socket.id);
 });
 
-// =====================================================
-// 🚫 SCHEDULED MESSAGE SENDER — DISABLED
-// =====================================================
-// Intentionally disabled while testing Sheets + live sync
-// To re-enable later, we will restore cron.schedule()
-// =====================================================
-
 // -------------------- START SERVER --------------------
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
