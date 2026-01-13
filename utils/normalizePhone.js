@@ -1,15 +1,14 @@
-function normalizePhone(phone) {
-  // Remove all non-digit characters except leading +
-  if (!phone) return "";
-  let normalized = phone.replace(/[^\d+]/g, "");
-  // Ensure + is at the start
-  if (normalized.startsWith("1") && !normalized.startsWith("+")) {
-    normalized = "+" + normalized;
-  }
-  if (!normalized.startsWith("+")) {
-    normalized = "+" + normalized;
-  }
-  return normalized;
-}
+module.exports = function normalizePhone(input) {
+  if (!input) return "";
 
-module.exports = normalizePhone;
+  // strip everything except digits
+  const digits = String(input).replace(/\D/g, "");
+
+  // allow 10-digit US numbers
+  if (digits.length === 10) return `+1${digits}`;
+
+  // allow 11-digit starting with 1
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+
+  return ""; // invalid
+};
