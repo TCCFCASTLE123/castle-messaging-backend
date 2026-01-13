@@ -1,13 +1,22 @@
-// db.js
+// db.js — CLEAN, STABLE, BOOT-PROOF
 const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
 
-// DB file
-const db = new sqlite3.Database(path.resolve(__dirname, "database.sqlite"));
+// SQLite file (use Render Disk later if you want persistence)
+const DB_PATH = path.join(__dirname, "database.sqlite");
 
-// Make startup statements run in order
+const db = new sqlite3.Database(DB_PATH, (err) => {
+  if (err) {
+    console.error("❌ SQLite connection failed:", err.message);
+  } else {
+    console.log("✅ SQLite connected:", DB_PATH);
+  }
+});
+
 db.serialize(() => {
-  // 1) Create clients table WITH language included (for fresh DBs)
+  /* =========================
+     CLIENTS
+  ========================= */
   db.run(`
     CREATE TABLE IF NOT EXISTS clients (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -19,27 +28,13 @@ db.serialize(() => {
     )
   `);
 
-  // 2) Migrate older DBs that already had clients but no language
-  db.run("ALTER TABLE clients ADD COLUMN language TEXT", (err) => {
-    if (err) {
-      // Ignore if it already exists
-      const msg = String(err.message || "");
-      if (
-        !msg.includes("duplicate column name") &&
-        !msg.includes("no such table")
-      ) {
-        console.error("DB migration failed (clients.language):", err.message);
-      }
-    } else {
-      console.log("DB migration applied: clients.language column added");
-    }
-  });
-
-  // Messages table
+  /* =========================
+     MESSAGES (Twilio-critical)
+  ========================= */
   db.run(`
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      client_id INTEGER NOT NULL,
+      client_id INTEGER,
       sender TEXT NOT NULL,
       text TEXT NOT NULL,
       direction TEXT,
@@ -49,7 +44,9 @@ db.serialize(() => {
     )
   `);
 
-  // Users table
+  /* =========================
+     USERS / AUTH
+  ========================= */
   db.run(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,28 +54,62 @@ db.serialize(() => {
       password TEXT NOT NULL,
       role TEXT DEFAULT 'admin'
     )
-    // Statuses table (needed by /api/statuses)
-db.run(`
-  CREATE TABLE IF NOT EXISTS statuses (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE NOT NULL
-  )
-`);
-
-// Optional: seed defaults so UI dropdown isn't empty
-db.run(`INSERT OR IGNORE INTO statuses (name) VALUES ('active')`);
-db.run(`INSERT OR IGNORE INTO statuses (name) VALUES ('inactive')`);
-db.run(`INSERT OR IGNORE INTO statuses (name) VALUES ('new')`);
-
   `);
 
-  // Optional: log columns so you can SEE it worked in Render logs
-  db.all("PRAGMA table_info(clients)", (e, rows) => {
-    if (!e && rows) {
-      console.log("clients columns:", rows.map(r => r.name).join(", "));
+  /* =========================
+     STATUSES
+  ========================= */
+  db.run(`
+    CREATE TABLE IF NOT EXISTS statuses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL
+    )
+  `);
+
+  db.run(`INSERT OR IGNORE INTO statuses (name) VALUES ('new')`);
+  db.run(`INSERT OR IGNORE INTO statuses (name) VALUES ('active')`);
+  db.run(`INSERT OR IGNORE INTO statuses (name) VALUES ('closed')`);
+
+  /* =========================
+     TEMPLATES
+  ========================= */
+  db.run(`
+    CREATE TABLE IF NOT EXISTS templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      body TEXT NOT NULL
+    )
+  `);
+
+  /* =========================
+     SCHEDULED MESSAGES
+  ========================= */
+  db.run(`
+    CREATE TABLE IF NOT EXISTS scheduled_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_id INTEGER,
+      message TEXT,
+      send_at DATETIME,
+      sent INTEGER DEFAULT 0,
+      FOREIGN KEY (client_id) REFERENCES clients(id)
+    )
+  `);
+
+  /* =========================
+     OPTIONAL: LOG SCHEMA
+     (helps confirm Render is using THIS file)
+  ========================= */
+  db.all("PRAGMA table_info(clients)", (err, rows) => {
+    if (!err && rows) {
+      console.log("📦 clients columns:", rows.map(r => r.name).join(", "));
+    }
+  });
+
+  db.all("PRAGMA table_info(messages)", (err, rows) => {
+    if (!err && rows) {
+      console.log("📦 messages columns:", rows.map(r => r.name).join(", "));
     }
   });
 });
 
 module.exports = db;
-
