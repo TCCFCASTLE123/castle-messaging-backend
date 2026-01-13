@@ -132,7 +132,9 @@ router.post("/", (req, res) => {
 });
 
 /**
+/**
  * PATCH /api/clients/:id
+ * Partial update (only fields provided are updated)
  */
 router.patch("/:id", (req, res) => {
   const clear = withTimeout(res, "PATCH /api/clients/:id");
@@ -151,83 +153,109 @@ router.patch("/:id", (req, res) => {
       AppointmentScheduledDate,
     } = req.body || {};
 
-    const cleanName = (name || "").trim();
-    const cleanPhone = canonicalPhone(phone);
-
-    if (!cleanName) {
-      clear();
-      return res.status(400).json({ error: "Name is required" });
-    }
-    if (!cleanPhone || cleanPhone.length < 10) {
-      clear();
-      return res.status(400).json({ error: "Phone number is required (10 digits)" });
-    }
-
-    // prevent updating into someone else's phone
-    db.get(
-      "SELECT id FROM clients WHERE phone = ? AND id != ?",
-      [cleanPhone, id],
-      (dupeErr, dupeRow) => {
-        if (dupeErr) {
-          clear();
-          console.error("❌ Duplicate check failed:", dupeErr);
-          return res.status(500).json({ error: "Duplicate check failed" });
-        }
-
-        if (dupeRow) {
-          clear();
-          return res.status(409).json({ error: "That phone number already exists as a client." });
-        }
-
-        db.run(
-          `
-            UPDATE clients SET
-              name = ?,
-              phone = ?,
-              email = ?,
-              notes = ?,
-              language = ?,
-              office = ?,
-              case_type = ?,
-              appointment_datetime = ?
-            WHERE id = ?
-          `,
-          [
-            cleanName,
-            cleanPhone,
-            email || null,
-            notes || null,
-            language || "English",
-            office || null,
-            case_type || null,
-            AppointmentScheduledDate || null,
-            id,
-          ],
-          function (updErr) {
-            if (updErr) {
-              clear();
-              console.error("❌ Client update failed:", updErr);
-              return res.status(500).json({ error: "Failed to update client" });
-            }
-
-            db.get("SELECT * FROM clients WHERE id = ?", [id], (getErr, updated) => {
-              clear();
-              if (getErr) {
-                console.error("❌ Fetch updated client failed:", getErr);
-                return res.status(500).json({ error: "Updated, but failed to fetch client" });
-              }
-              return res.json(updated);
-            });
-          }
-        );
+    // 1) Load existing client so we can support partial updates
+    db.get("SELECT * FROM clients WHERE id = ?", [id], (getErr, existing) => {
+      if (getErr) {
+        clear();
+        console.error("❌ Load client failed:", getErr);
+        return res.status(500).json({ error: "Failed to load client" });
       }
-    );
+      if (!existing) {
+        clear();
+        return res.status(404).json({ error: "Client not found" });
+      }
+
+      // 2) Merge: use provided fields, otherwise keep existing
+      const mergedName = name !== undefined ? String(name).trim() : (existing.name || "");
+      const mergedPhone = phone !== undefined ? canonicalPhone(phone) : (existing.phone || "");
+
+      const mergedEmail = email !== undefined ? (email || null) : existing.email;
+      const mergedNotes = notes !== undefined ? (notes || null) : existing.notes;
+      const mergedLanguage = language !== undefined ? (language || "English") : (existing.language || "English");
+      const mergedOffice = office !== undefined ? (office || null) : existing.office;
+      const mergedCaseType = case_type !== undefined ? (case_type || null) : existing.case_type;
+      const mergedAppt = AppointmentScheduledDate !== undefined
+        ? (AppointmentScheduledDate || null)
+        : existing.appointment_datetime;
+
+      // 3) Validate final values (not just what the frontend sent)
+      if (!mergedName) {
+        clear();
+        return res.status(400).json({ error: "Name is required" });
+      }
+      if (!mergedPhone || mergedPhone.length < 10) {
+        clear();
+        return res.status(400).json({ error: "Phone number is required (10 digits)" });
+      }
+
+      // 4) Prevent updating into someone else's phone
+      db.get(
+        "SELECT id FROM clients WHERE phone = ? AND id != ?",
+        [mergedPhone, id],
+        (dupeErr, dupeRow) => {
+          if (dupeErr) {
+            clear();
+            console.error("❌ Duplicate check failed:", dupeErr);
+            return res.status(500).json({ error: "Duplicate check failed" });
+          }
+
+          if (dupeRow) {
+            clear();
+            return res.status(409).json({ error: "That phone number already exists as a client." });
+          }
+
+          // 5) Update row
+          db.run(
+            `
+              UPDATE clients SET
+                name = ?,
+                phone = ?,
+                email = ?,
+                notes = ?,
+                language = ?,
+                office = ?,
+                case_type = ?,
+                appointment_datetime = ?
+              WHERE id = ?
+            `,
+            [
+              mergedName,
+              mergedPhone,
+              mergedEmail,
+              mergedNotes,
+              mergedLanguage,
+              mergedOffice,
+              mergedCaseType,
+              mergedAppt,
+              id,
+            ],
+            function (updErr) {
+              if (updErr) {
+                clear();
+                console.error("❌ Client update failed:", updErr);
+                return res.status(500).json({ error: "Failed to update client" });
+              }
+
+              db.get("SELECT * FROM clients WHERE id = ?", [id], (finalErr, updated) => {
+                clear();
+                if (finalErr) {
+                  console.error("❌ Fetch updated client failed:", finalErr);
+                  return res.status(500).json({ error: "Updated, but failed to fetch client" });
+                }
+                return res.json(updated);
+              });
+            }
+          );
+        }
+      );
+    });
   } catch (e) {
     clear();
     console.error("❌ PATCH /api/clients crashed:", e);
     return res.status(500).json({ error: "Server error updating client" });
   }
 });
+
 
 /**
  * PUT /api/clients/:id/status
@@ -275,3 +303,4 @@ router.delete("/:id", (req, res) => {
 });
 
 module.exports = router;
+
