@@ -181,6 +181,12 @@ router.post("/send", async (req, res) => {
 
     const client_id = clientRow.id;
     const to = normalizePhone(clientRow.phone);
+if (!to) {
+  return res.status(400).json({
+    ok: false,
+    error: "Client phone is invalid. Must be a real 10-digit US number."
+  });
+}
 
     if (!to) return res.status(400).json({ ok: false, error: "Client phone is invalid" });
     if (!twilioFrom) return res.status(500).json({ ok: false, error: "TWILIO_PHONE_NUMBER missing" });
@@ -238,3 +244,4 @@ router.post("/send", async (req, res) => {
 });
 
 module.exports = router;
+
