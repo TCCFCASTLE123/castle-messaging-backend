@@ -12,7 +12,6 @@ function requireKey(req, res, next) {
   next();
 }
 
-// MUST match routes/clients.js storage (10 digits)
 function canonicalPhone(input) {
   if (!input) return "";
   const digits = String(input).replace(/\D/g, "");
@@ -20,21 +19,8 @@ function canonicalPhone(input) {
   return digits;
 }
 
-// dropdown codes for APPT SETTER + I.C.
 const ALLOWED_CODES = new Set([
-  "CC",
-  "CLC",
-  "DT",
-  "GBC",
-  "ILD",
-  "JMP",
-  "JH",
-  "JWG",
-  "OXS",
-  "OAC",
-  "NVA",
-  "TRD",
-  "Walk-in",
+  "CC","CLC","DT","GBC","ILD","JMP","JH","JWG","OXS","OAC","NVA","TRD","Walk-in"
 ]);
 
 function cleanCode(v) {
@@ -46,39 +32,37 @@ function buildAppointmentDatetime(apptDate, apptTime) {
   const d = (apptDate || "").toString().trim();
   const t = (apptTime || "").toString().trim();
   if (!d && !t) return null;
-  return `${d}${t ? " " + t : ""}`.trim(); // store as readable string (stable)
+  return `${d}${t ? " " + t : ""}`.trim();
 }
 
-// helper to read either your Apps Script keys or raw sheet header keys
 function pick(row, ...keys) {
   for (const k of keys) {
-    if (row && row[k] !== undefined && row[k] !== null && String(row[k]).trim() !== "") {
-      return row[k];
+    if (row && row[k] !== undefined && row[k] !== null) {
+      const v = String(row[k]).trim();
+      if (v !== "") return row[k];
     }
   }
   return "";
 }
 
-/**
- * POST /api/sheets/update
- * Expected payload shape:
- * { row: { ...fields... }, source?: "DAILY"|"CALL" }
- *
- * We map sheet columns to DB:
- * - FULL NAME -> name
- * - PHONE NUMBER -> phone (canonical)
- * - EMAIL -> email
- * - OFFICE -> office
- * - SP/ENG? -> language
- * - CR/IMM/BK? -> case_group
- * - "Sub Case Type" (your UI label) -> case_type (from CASE TYPE column)
- * - APPT DATE + APPT TIME -> appointment_datetime
- * - STATUS -> status_text
- * - APPT. SETTER -> appt_setter
- * - I.C. -> ic
- * - NOTES -> notes
- */
-router.post("/update", requireKey, (req, res) => {
+// lookup statuses.id by name (case-insensitive)
+function getStatusIdByName(statusText) {
+  return new Promise((resolve, reject) => {
+    const s = (statusText || "").trim();
+    if (!s) return resolve(null);
+
+    db.get(
+      "SELECT id FROM statuses WHERE LOWER(name) = LOWER(?)",
+      [s],
+      (err, row) => {
+        if (err) return reject(err);
+        resolve(row ? row.id : null);
+      }
+    );
+  });
+}
+
+router.post("/update", requireKey, async (req, res) => {
   try {
     const payload = req.body || {};
     const row = payload.row || {};
@@ -88,21 +72,22 @@ router.post("/update", requireKey, (req, res) => {
     const emailRaw = String(pick(row, "email", "EMAIL")).trim();
     const office = String(pick(row, "office", "OFFICE")).trim();
 
-    const statusText = String(pick(row, "status", "STATUS")).trim();
+    const statusText = String(pick(row, "status", "STATUS")).trim(); // from sheet
+    const status_id = await getStatusIdByName(statusText); // convert to id
+
     const caseGroup = String(pick(row, "case_group", "CR/IMM/BK?")).trim();
-
-    // "Sub Case Type" is just your front-facing label.
-    // We store it in DB as case_type using the sheet "CASE TYPE" column.
-    const subCaseType = String(pick(row, "case_type", "CASE TYPE")).trim();
-
-    const language = String(pick(row, "language", "SP/ENG?")).trim();
+    const subCaseType = String(pick(row, "case_type", "CASE TYPE")).trim(); // “Sub Case Type” in UI
+    const language = String(pick(row, "language", "SP/ENG?", "ENG/SP?")).trim();
 
     const apptSetter = cleanCode(pick(row, "appt_setter", "APPT. SETTER"));
     const ic = cleanCode(pick(row, "ic", "I.C."));
 
     const apptDate = String(pick(row, "appt_date", "APPT. DATE")).trim();
     const apptTime = String(pick(row, "appt_time", "APPT. TIME")).trim();
-    const appointment_datetime = buildAppointmentDatetime(apptDate, apptTime);
+    const appointment_datetime =
+      buildAppointmentDatetime(apptDate, apptTime) ||
+      String(pick(row, "appointment_at")).trim() ||
+      null;
 
     const notes = String(pick(row, "notes", "NOTES")).trim();
 
@@ -113,18 +98,18 @@ router.post("/update", requireKey, (req, res) => {
     const email = emailRaw || null;
     const finalOffice = office || null;
     const finalLanguage = language || null;
-    const finalStatus = statusText || null;
-    const finalCaseGroup = caseGroup || null;
 
-    // prefer Sub Case Type; if blank, fallback to group
     const finalCaseType = (subCaseType || caseGroup || "").trim() || null;
 
+    // NOTE: this assumes you have added these optional columns:
+    // status_text, case_group, appt_setter, ic
+    // If you didn't add them, remove them from SQL.
     const sql = `
       INSERT INTO clients
         (name, phone, email, notes, language, office, case_type, appointment_datetime,
-         status_text, case_group, appt_setter, ic)
+         status_id, status_text, case_group, appt_setter, ic)
       VALUES
-        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(phone) DO UPDATE SET
         name = excluded.name,
         email = excluded.email,
@@ -133,6 +118,7 @@ router.post("/update", requireKey, (req, res) => {
         office = excluded.office,
         case_type = excluded.case_type,
         appointment_datetime = excluded.appointment_datetime,
+        status_id = excluded.status_id,
         status_text = excluded.status_text,
         case_group = excluded.case_group,
         appt_setter = excluded.appt_setter,
@@ -150,8 +136,9 @@ router.post("/update", requireKey, (req, res) => {
         finalOffice,
         finalCaseType,
         appointment_datetime,
-        finalStatus,
-        finalCaseGroup,
+        status_id,                 // ✅ what React dropdown needs
+        statusText || null,        // optional display/debug
+        caseGroup || null,
         apptSetter,
         ic,
       ],
@@ -168,17 +155,18 @@ router.post("/update", requireKey, (req, res) => {
             email,
             office: finalOffice,
             language: finalLanguage,
-            case_type: finalCaseType, // you can label this “Sub Case Type” in React
-            case_group: finalCaseGroup,
-            status_text: finalStatus,
+            case_type: finalCaseType,
             appointment_datetime,
+            status_id,
+            status_text: statusText || null,
+            case_group: caseGroup || null,
             appt_setter: apptSetter,
             ic,
             notes: notes || null,
           });
         }
 
-        return res.json({ ok: true });
+        return res.json({ ok: true, status_id, status_text: statusText || null });
       }
     );
   } catch (e) {
