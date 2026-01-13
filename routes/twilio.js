@@ -4,7 +4,6 @@ const db = require("../db");
 
 const router = express.Router();
 
-// Twilio client
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
   process.env.TWILIO_AUTH_TOKEN
@@ -12,65 +11,42 @@ const twilioClient = twilio(
 
 const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
 
-/**
- * Normalize phone to canonical DB format: 10-digit digits only
- * - "+1 (602) 796-0878" -> "6027960878"
- * - "16027960878" -> "6027960878"
- */
 function canonicalPhone(input) {
   if (!input) return "";
   const digits = String(input).replace(/\D/g, "");
   if (digits.length === 11 && digits.startsWith("1")) return digits.slice(1);
   if (digits.length === 10) return digits;
-  return digits; // fallback (better than empty)
+  return digits;
 }
 
-/**
- * Twilio needs E.164 for sending: "+16027960878"
- */
 function toE164FromCanonical(canon10) {
   const digits = canonicalPhone(canon10);
   if (digits.length === 10) return `+1${digits}`;
   if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
   if (digits.startsWith("+")) return digits;
-  // worst case: try to add +
   return digits.startsWith("+") ? digits : `+${digits}`;
 }
 
-/**
- * Find or create client by phone (using canonical phone in DB)
- * Robust against race conditions + old rows.
- */
 function ensureClientByPhone(phoneRaw, defaultName, cb) {
   const phone = canonicalPhone(phoneRaw);
-
   if (!phone || phone.length < 10) {
-    return cb(new Error("Invalid phone after canonicalization: " + phoneRaw));
+    return cb(new Error("Invalid phone: " + phoneRaw));
   }
 
-  // 1) lookup
-  db.get("SELECT id, phone FROM clients WHERE phone = ?", [phone], (err, row) => {
+  db.get("SELECT id FROM clients WHERE phone = ?", [phone], (err, row) => {
     if (err) return cb(err);
     if (row && row.id) return cb(null, row.id, phone);
 
-    // 2) insert
     db.run(
-      `
-      INSERT INTO clients (name, phone, created_at)
-      VALUES (?, ?, datetime('now'))
-      `,
+      `INSERT INTO clients (name, phone, created_at) VALUES (?, ?, datetime('now'))`,
       [defaultName || "(New Lead)", phone],
       function (insertErr) {
-        if (!insertErr) {
-          return cb(null, this.lastID, phone);
-        }
+        if (!insertErr) return cb(null, this.lastID, phone);
 
-        // If insert failed (likely UNIQUE), do a second lookup
+        // If insert failed (likely UNIQUE), lookup again
         db.get("SELECT id FROM clients WHERE phone = ?", [phone], (err2, row2) => {
           if (err2) return cb(err2);
           if (row2 && row2.id) return cb(null, row2.id, phone);
-
-          // still failed -> real error
           return cb(insertErr);
         });
       }
@@ -80,9 +56,9 @@ function ensureClientByPhone(phoneRaw, defaultName, cb) {
 
 /**
  * OUTBOUND SMS
- * React / Apps Script → Node → Twilio
+ * Apps Script → Node → Twilio
  * POST /api/twilio/send
- * Body: { phone, text }
+ * Body: { phone, text, sender? }
  * Header: x-api-key
  */
 router.post("/send", (req, res) => {
@@ -93,6 +69,9 @@ router.post("/send", (req, res) => {
 
   const phoneRaw = req.body.phone;
   const text = (req.body.text || "").trim();
+
+  // ✅ allow UI to send sender="me" so it doesn't show as automated
+  const sender = (req.body.sender || "me").trim();
 
   const phoneCanon = canonicalPhone(phoneRaw);
   const phoneE164 = toE164FromCanonical(phoneCanon);
@@ -108,11 +87,7 @@ router.post("/send", (req, res) => {
     }
 
     twilioClient.messages
-      .create({
-        from: twilioFrom,
-        to: phoneE164,
-        body: text,
-      })
+      .create({ from: twilioFrom, to: phoneE164, body: text })
       .then((message) => {
         const ts = new Date().toISOString();
 
@@ -121,7 +96,7 @@ router.post("/send", (req, res) => {
           INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id)
           VALUES (?, ?, ?, ?, ?, ?)
           `,
-          [clientId, "system", text, "outbound", ts, message.sid || null],
+          [clientId, sender, text, "outbound", ts, message.sid || null],
           function (msgErr) {
             if (msgErr) {
               console.error("❌ Outbound message save failed:", msgErr.message);
@@ -133,7 +108,7 @@ router.post("/send", (req, res) => {
                 id: this.lastID,
                 client_id: clientId,
                 phone: phoneCanon,
-                sender: "system",
+                sender,
                 text,
                 direction: "outbound",
                 timestamp: ts,
@@ -158,7 +133,14 @@ router.post("/send", (req, res) => {
  * POST /api/twilio/inbound
  */
 router.post("/inbound", (req, res) => {
-  // respond immediately so Twilio doesn't retry
+  // ✅ log FIRST so we can see hits even if Twilio retries
+  console.log("📩 INBOUND HIT:", {
+    From: req.body.From,
+    Body: req.body.Body,
+    MessageSid: req.body.MessageSid,
+  });
+
+  // ✅ immediately respond so Twilio is happy
   res.type("text/xml").status(200).send("<Response></Response>");
 
   try {
@@ -167,7 +149,6 @@ router.post("/inbound", (req, res) => {
     const sid = req.body.MessageSid || null;
 
     const phoneCanon = canonicalPhone(fromRaw);
-
     if (!phoneCanon || phoneCanon.length < 10 || !text) return;
 
     ensureClientByPhone(phoneCanon, "(New Reply)", (err, clientId) => {
@@ -183,6 +164,8 @@ router.post("/inbound", (req, res) => {
         [clientId, "client", text, "inbound", ts, sid],
         function (msgErr) {
           if (msgErr) return console.error("❌ Inbound message insert failed:", msgErr.message);
+
+          console.log("✅ inbound saved to DB:", { clientId, phoneCanon, text });
 
           if (req.io) {
             req.io.emit("message", {
@@ -205,3 +188,4 @@ router.post("/inbound", (req, res) => {
 });
 
 module.exports = router;
+
