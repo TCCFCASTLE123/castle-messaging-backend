@@ -181,7 +181,8 @@ router.post("/send", async (req, res) => {
 
     const client_id = clientRow.id;
     const to = normalizePhone(clientRow.phone);
-if (!to) {
+
+    if (!to) {
   return res.status(400).json({
     ok: false,
     error: "Client phone is invalid. Must be a real 10-digit US number."
@@ -244,4 +245,5 @@ if (!to) {
 });
 
 module.exports = router;
+
 
