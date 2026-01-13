@@ -1,3 +1,5 @@
+// db.js — CLEAN + RENDER DISK + WAL MODE (prevents hangs/locks)
+
 const sqlite3 = require("sqlite3").verbose();
 
 const DB_PATH = process.env.SQLITE_PATH || "/var/data/database.sqlite";
@@ -8,6 +10,15 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 });
 
 db.serialize(() => {
+  // Prevent "database is locked" issues that look like pending requests
+  db.run("PRAGMA journal_mode = WAL;");
+  db.run("PRAGMA synchronous = NORMAL;");
+  db.run("PRAGMA foreign_keys = ON;");
+  db.run("PRAGMA busy_timeout = 8000;");
+
+  /* =========================
+     STATUSES
+  ========================= */
   db.run(`
     CREATE TABLE IF NOT EXISTS statuses (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,8 +40,16 @@ db.serialize(() => {
     "Did Not Retain",
     "Referred Out",
   ];
-  statuses.forEach((s) => db.run(`INSERT OR IGNORE INTO statuses (name) VALUES (?)`, [s]));
 
+  statuses.forEach((s) => {
+    db.run(`INSERT OR IGNORE INTO statuses (name) VALUES (?)`, [s]);
+  });
+
+  /* =========================
+     CLIENTS
+     - phone is UNIQUE (fixes ON CONFLICT issues)
+     - includes status_id, office, case_type, appointment_datetime
+  ========================= */
   db.run(`
     CREATE TABLE IF NOT EXISTS clients (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,6 +67,9 @@ db.serialize(() => {
     )
   `);
 
+  /* =========================
+     MESSAGES
+  ========================= */
   db.run(`
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,8 +83,17 @@ db.serialize(() => {
     )
   `);
 
-  db.all("PRAGMA table_info(clients)", (_, rows) => {
-    console.log("📦 clients columns:", rows.map((r) => r.name).join(", "));
+  // Helpful boot logs
+  db.all("PRAGMA table_info(clients)", (err, rows) => {
+    if (!err && rows) {
+      console.log("📦 clients columns:", rows.map((r) => r.name).join(", "));
+    }
+  });
+
+  db.all("PRAGMA table_info(messages)", (err, rows) => {
+    if (!err && rows) {
+      console.log("📦 messages columns:", rows.map((r) => r.name).join(", "));
+    }
   });
 });
 
