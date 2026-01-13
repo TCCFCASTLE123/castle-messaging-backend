@@ -1,16 +1,17 @@
+// routes/messages.js
+
 const express = require("express");
 const router = express.Router();
+const twilio = require("twilio");
 const db = require("../db");
 const normalizePhone = require("../utils/normalizePhone");
-const twilio = require("twilio");
 
-/**
- * Twilio client (server-side)
- */
+// Twilio client
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
   process.env.TWILIO_AUTH_TOKEN
 );
+
 const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
 
 /**
@@ -18,7 +19,7 @@ const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
  * Query:
  *   - ?client_id=123  OR
  *   - ?phone=6025551234
- * Returns oldest-first (ASC) for chat rendering
+ * Returns newest-last (ASC) for chat rendering
  */
 router.get("/", (req, res) => {
   const clientId = req.query.client_id ? String(req.query.client_id).trim() : "";
@@ -51,19 +52,19 @@ router.get("/", (req, res) => {
   if (clientId) return runQueryByClientId(clientId);
 
   // If phone provided, translate to client_id first
-  db.get("SELECT id FROM clients WHERE phone = ?", [phone], (err, row) => {
+  db.get("SELECT id FROM clients WHERE phone = ?", [phone.replace(/\D/g, "").slice(-10)], (err, row) => {
     if (err) {
       console.error("❌ client lookup by phone failed:", err.message);
       return res.status(500).json({ ok: false, error: err.message });
     }
-    if (!row) return res.json([]); // no client yet
+    if (!row) return res.json([]);
     runQueryByClientId(row.id);
   });
 });
 
 /**
  * GET /api/messages/conversation/:client_id
- * (kept for backward compatibility with your current React)
+ * Backward compatible
  */
 router.get("/conversation/:client_id", (req, res) => {
   const clientId = req.params.client_id;
@@ -87,20 +88,119 @@ router.get("/conversation/:client_id", (req, res) => {
 });
 
 /**
+ * POST /api/messages/send
+ * Sends an SMS (Twilio) AND saves message in DB AND emits socket event
+ * Body: { client_id?, phone?, text, sender? }
+ */
+router.post("/send", async (req, res) => {
+  try {
+    const text = (req.body.text || "").trim();
+    const sender = (req.body.sender || "agent").trim();
+
+    const clientIdRaw = req.body.client_id ? String(req.body.client_id).trim() : "";
+    const phoneRaw = req.body.phone ? String(req.body.phone).trim() : "";
+
+    if (!text) {
+      return res.status(400).json({ ok: false, error: "Missing text" });
+    }
+
+    // Resolve client
+    const clientRow = await new Promise((resolve, reject) => {
+      if (clientIdRaw) {
+        db.get("SELECT id, phone FROM clients WHERE id = ?", [clientIdRaw], (err, row) => {
+          if (err) return reject(err);
+          resolve(row || null);
+        });
+      } else {
+        // phone must match how you store it (10 digits in clients.phone)
+        const canon10 = phoneRaw ? String(phoneRaw).replace(/\D/g, "").slice(-10) : "";
+        if (!canon10) return resolve(null);
+
+        db.get("SELECT id, phone FROM clients WHERE phone = ?", [canon10], (err, row) => {
+          if (err) return reject(err);
+          resolve(row || null);
+        });
+      }
+    });
+
+    if (!clientRow) {
+      return res.status(404).json({ ok: false, error: "Client not found" });
+    }
+
+    const client_id = clientRow.id;
+
+    // Twilio needs E.164; clientRow.phone is canonical 10 digits
+    const to = normalizePhone(clientRow.phone);
+
+    if (!to) {
+      return res.status(400).json({
+        ok: false,
+        error: "Client phone is invalid. Must be a real 10-digit US number.",
+      });
+    }
+
+    // Send via Twilio
+    const sent = await twilioClient.messages.create({
+      from: twilioFrom,
+      to,
+      body: text,
+    });
+
+    // Save to DB
+    const ts = new Date().toISOString();
+
+    const messageId = await new Promise((resolve, reject) => {
+      db.run(
+        `INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [client_id, sender, text, "outbound", ts, sent.sid],
+        function (err) {
+          if (err) return reject(err);
+          resolve(this.lastID);
+        }
+      );
+    });
+
+    // Emit live update
+    if (req.io) {
+      req.io.emit("message", {
+        id: messageId,
+        client_id,
+        phone: to,
+        sender,
+        text,
+        direction: "outbound",
+        timestamp: ts,
+        external_id: sent.sid,
+      });
+    }
+
+    return res.json({ ok: true, id: messageId, client_id, sid: sent.sid });
+  } catch (err) {
+    console.error("❌ POST /api/messages/send failed:", err);
+    return res.status(500).json({
+      ok: false,
+      error: err?.message || String(err),
+    });
+  }
+});
+
+/**
  * POST /api/messages/note
  * Save an internal note (does NOT send SMS)
  * Body: { phone, text, sender? }
  */
 router.post("/note", (req, res) => {
-  const phone = normalizePhone(req.body.phone || "");
+  const phoneRaw = req.body.phone || "";
+  const canon10 = String(phoneRaw).replace(/\D/g, "").slice(-10);
   const text = (req.body.text || "").trim();
   const sender = (req.body.sender || "agent").trim();
 
-  if (!phone || !text) {
+  if (!canon10 || !text) {
     return res.status(400).json({ ok: false, error: "Missing phone or text" });
   }
 
-  db.get("SELECT id FROM clients WHERE phone = ?", [phone], (err, row) => {
+  db.get("SELECT id FROM clients WHERE phone = ?", [canon10], (err, row) => {
     if (err) {
       console.error("❌ client lookup failed:", err.message);
       return res.status(500).json({ ok: false, error: err.message });
@@ -122,7 +222,7 @@ router.post("/note", (req, res) => {
           req.io.emit("message", {
             id: this.lastID,
             client_id: row.id,
-            phone,
+            phone: `+1${canon10}`,
             sender,
             text,
             direction: "outbound",
@@ -131,119 +231,10 @@ router.post("/note", (req, res) => {
           });
         }
 
-        res.json({ ok: true, id: this.lastID, client_id: row.id, phone });
+        res.json({ ok: true, id: this.lastID, client_id: row.id });
       }
     );
   });
 });
 
-/**
- * POST /api/messages/send
- * Sends an outbound SMS via Twilio + saves to DB + emits socket event
- *
- * Body:
- *   { client_id, text, sender? }
- * OR
- *   { phone, text, sender? }
- */
-router.post("/send", async (req, res) => {
-  try {
-    const text = (req.body.text || "").trim();
-    const sender = (req.body.sender || "agent").trim();
-
-    const clientIdRaw = req.body.client_id ? String(req.body.client_id).trim() : "";
-    const phoneRaw = req.body.phone ? String(req.body.phone).trim() : "";
-    const phoneNormalized = phoneRaw ? normalizePhone(phoneRaw) : "";
-
-    if (!text) return res.status(400).json({ ok: false, error: "Missing text" });
-
-    const resolveClient = () =>
-      new Promise((resolve, reject) => {
-        if (clientIdRaw) {
-          db.get("SELECT id, phone FROM clients WHERE id = ?", [clientIdRaw], (err, row) => {
-            if (err) return reject(err);
-            resolve(row || null);
-          });
-        } else if (phoneNormalized) {
-          db.get("SELECT id, phone FROM clients WHERE phone = ?", [phoneNormalized], (err, row) => {
-            if (err) return reject(err);
-            resolve(row || null);
-          });
-        } else {
-          resolve(null);
-        }
-      });
-
-    const clientRow = await resolveClient();
-    if (!clientRow) {
-      return res.status(404).json({ ok: false, error: "Client not found" });
-    }
-
-    const client_id = clientRow.id;
-    const to = normalizePhone(clientRow.phone);
-
-    if (!to) {
-  return res.status(400).json({
-    ok: false,
-    error: "Client phone is invalid. Must be a real 10-digit US number."
-  });
-}
-
-    if (!to) return res.status(400).json({ ok: false, error: "Client phone is invalid" });
-    if (!twilioFrom) return res.status(500).json({ ok: false, error: "TWILIO_PHONE_NUMBER missing" });
-
-    // Send via Twilio
-    const sent = await twilioClient.messages.create({
-      from: twilioFrom,
-      to,
-      body: text,
-    });
-
-    const ts = new Date().toISOString();
-
-    const insertId = await new Promise((resolve, reject) => {
-      db.run(
-        "INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id) VALUES (?, ?, ?, ?, ?, ?)",
-        [client_id, sender, text, "outbound", ts, sent.sid],
-        function (err) {
-          if (err) return reject(err);
-          resolve(this.lastID);
-        }
-      );
-    });
-
-    if (req.io) {
-      req.io.emit("message", {
-        id: insertId,
-        client_id,
-        phone: to,
-        sender,
-        text,
-        direction: "outbound",
-        timestamp: ts,
-        external_id: sent.sid,
-      });
-    }
-
-    return res.json({
-      ok: true,
-      message: {
-        id: insertId,
-        client_id,
-        phone: to,
-        sender,
-        text,
-        direction: "outbound",
-        timestamp: ts,
-        external_id: sent.sid,
-      },
-    });
-  } catch (err) {
-    console.error("❌ POST /api/messages/send failed:", err);
-    return res.status(500).json({ ok: false, error: "Server error sending message" });
-  }
-});
-
 module.exports = router;
-
-
