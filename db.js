@@ -1,17 +1,35 @@
-// db.js — CLEAN, STABLE, BOOT-PROOF
+// db.js — CLEAN + SELF-MIGRATING (stops the “missing column” whack-a-mole)
 const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
 
-// SQLite file (use Render Disk later if you want persistence)
 const DB_PATH = path.join(__dirname, "database.sqlite");
 
 const db = new sqlite3.Database(DB_PATH, (err) => {
-  if (err) {
-    console.error("❌ SQLite connection failed:", err.message);
-  } else {
-    console.log("✅ SQLite connected:", DB_PATH);
-  }
+  if (err) console.error("❌ SQLite connection failed:", err.message);
+  else console.log("✅ SQLite connected:", DB_PATH);
 });
+
+function tableColumns(table) {
+  return new Promise((resolve, reject) => {
+    db.all(`PRAGMA table_info(${table})`, (err, rows) => {
+      if (err) return reject(err);
+      resolve(rows.map((r) => r.name));
+    });
+  });
+}
+
+async function addColumnIfMissing(table, colName, colDefSql) {
+  const cols = await tableColumns(table);
+  if (cols.includes(colName)) return;
+
+  await new Promise((resolve, reject) => {
+    db.run(`ALTER TABLE ${table} ADD COLUMN ${colName} ${colDefSql}`, (err) => {
+      if (err) return reject(err);
+      console.log(`➕ Added column ${table}.${colName}`);
+      resolve();
+    });
+  });
+}
 
 db.serialize(() => {
   /* =========================
@@ -29,7 +47,7 @@ db.serialize(() => {
   `);
 
   /* =========================
-     MESSAGES (Twilio-critical)
+     MESSAGES
   ========================= */
   db.run(`
     CREATE TABLE IF NOT EXISTS messages (
@@ -57,7 +75,7 @@ db.serialize(() => {
   `);
 
   /* =========================
-     STATUSES
+     STATUSES (lookup; optional)
   ========================= */
   db.run(`
     CREATE TABLE IF NOT EXISTS statuses (
@@ -65,10 +83,6 @@ db.serialize(() => {
       name TEXT UNIQUE NOT NULL
     )
   `);
-
-  db.run(`INSERT OR IGNORE INTO statuses (name) VALUES ('new')`);
-  db.run(`INSERT OR IGNORE INTO statuses (name) VALUES ('active')`);
-  db.run(`INSERT OR IGNORE INTO statuses (name) VALUES ('closed')`);
 
   /* =========================
      TEMPLATES
@@ -96,20 +110,47 @@ db.serialize(() => {
   `);
 
   /* =========================
-     OPTIONAL: LOG SCHEMA
-     (helps confirm Render is using THIS file)
+     SEED LOOKUPS
   ========================= */
-  db.all("PRAGMA table_info(clients)", (err, rows) => {
-    if (!err && rows) {
-      console.log("📦 clients columns:", rows.map(r => r.name).join(", "));
-    }
-  });
-
-  db.all("PRAGMA table_info(messages)", (err, rows) => {
-    if (!err && rows) {
-      console.log("📦 messages columns:", rows.map(r => r.name).join(", "));
-    }
-  });
+  // These can be whatever you want; the important part is clients.status exists.
+  const seedStatuses = [
+    "Set",
+    "No show",
+    "Working to set",
+    "Attempted/unsuccessful",
+    "Did not retain",
+    "Pending",
+    "Retained",
+  ];
+  seedStatuses.forEach((s) => db.run(`INSERT OR IGNORE INTO statuses (name) VALUES (?)`, [s]));
 });
+
+// Run migrations after base tables exist
+(async () => {
+  try {
+    // ---- Clients: add the fields your UI/workflow needs
+    await addColumnIfMissing("clients", "office", "TEXT");                 // PHX | MESA | OP
+    await addColumnIfMissing("clients", "status", "TEXT");                 // Set | No show | ...
+    await addColumnIfMissing("clients", "case_type", "TEXT");              // Immigration | ...
+    await addColumnIfMissing("clients", "appointment_at", "TEXT");         // ISO string recommended
+    await addColumnIfMissing("clients", "created_at", "TEXT DEFAULT (datetime('now'))");
+    await addColumnIfMissing("clients", "updated_at", "TEXT");
+
+    // ---- Messages: add commonly expected fields without breaking legacy code
+    await addColumnIfMissing("messages", "phone", "TEXT");                 // convenience
+    await addColumnIfMissing("messages", "body", "TEXT");                  // if routes use body instead of text
+    await addColumnIfMissing("messages", "twilio_sid", "TEXT");            // if routes use twilio_sid
+    await addColumnIfMissing("messages", "delivery_status", "TEXT");       // sent/delivered/failed
+    await addColumnIfMissing("messages", "created_at", "TEXT DEFAULT (datetime('now'))");
+
+    // Helpful: show final schemas at boot
+    const clientsCols = await tableColumns("clients");
+    const messagesCols = await tableColumns("messages");
+    console.log("📦 clients columns:", clientsCols.join(", "));
+    console.log("📦 messages columns:", messagesCols.join(", "));
+  } catch (e) {
+    console.error("❌ Migration error:", e.message);
+  }
+})();
 
 module.exports = db;
