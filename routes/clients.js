@@ -1,8 +1,16 @@
-// routes/clients.js — FINAL
+// routes/clients.js — FINAL (robust client create/edit + clean errors)
 
 const express = require("express");
 const router = express.Router();
 const db = require("../db");
+
+function canonicalPhone(input) {
+  if (!input) return "";
+  const digits = String(input).replace(/\D/g, "");
+  if (digits.length === 11 && digits.startsWith("1")) return digits.slice(1);
+  if (digits.length === 10) return digits;
+  return digits;
+}
 
 // GET all clients
 router.get("/", (req, res) => {
@@ -18,7 +26,7 @@ router.get("/", (req, res) => {
         console.error("Clients fetch failed:", err);
         return res.status(500).json([]);
       }
-      res.json(rows);
+      res.json(rows || []);
     }
   );
 });
@@ -36,8 +44,13 @@ router.post("/", (req, res) => {
     AppointmentScheduledDate,
   } = req.body;
 
-  if (!name || !phone) {
-    return res.status(400).json({ error: "Name and phone required" });
+  const phoneCanon = canonicalPhone(phone);
+
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: "Name is required." });
+  }
+  if (!phoneCanon || phoneCanon.length < 10) {
+    return res.status(400).json({ error: "Phone number is required (10 digits)." });
   }
 
   db.run(
@@ -47,8 +60,8 @@ router.post("/", (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `,
     [
-      name,
-      phone,
+      name.trim(),
+      phoneCanon,
       email || null,
       notes || null,
       language || "English",
@@ -59,14 +72,18 @@ router.post("/", (req, res) => {
     function (err) {
       if (err) {
         console.error("Client insert failed:", err);
-        return res.status(500).json({ error: "Failed to save client" });
+
+        // Duplicate phone
+        if (String(err.message || "").includes("UNIQUE constraint failed: clients.phone")) {
+          return res.status(409).json({ error: "That phone number already exists as a client." });
+        }
+
+        return res.status(500).json({ error: "Failed to save client." });
       }
 
-      db.get(
-        "SELECT * FROM clients WHERE id = ?",
-        [this.lastID],
-        (_, row) => res.json(row)
-      );
+      db.get("SELECT * FROM clients WHERE id = ?", [this.lastID], (_, row) => {
+        res.json(row);
+      });
     }
   );
 });
@@ -74,6 +91,15 @@ router.post("/", (req, res) => {
 // UPDATE client
 router.patch("/:id", (req, res) => {
   const { id } = req.params;
+
+  const phoneCanon = canonicalPhone(req.body.phone);
+
+  if (!req.body.name || !req.body.name.trim()) {
+    return res.status(400).json({ error: "Name is required." });
+  }
+  if (!phoneCanon || phoneCanon.length < 10) {
+    return res.status(400).json({ error: "Phone number is required (10 digits)." });
+  }
 
   db.run(
     `
@@ -89,25 +115,28 @@ router.patch("/:id", (req, res) => {
     WHERE id = ?
     `,
     [
-      req.body.name,
-      req.body.phone,
-      req.body.email,
-      req.body.notes,
-      req.body.language,
-      req.body.office,
-      req.body.case_type,
-      req.body.AppointmentScheduledDate,
+      req.body.name.trim(),
+      phoneCanon,
+      req.body.email || null,
+      req.body.notes || null,
+      req.body.language || "English",
+      req.body.office || null,
+      req.body.case_type || null,
+      req.body.AppointmentScheduledDate || null,
       id,
     ],
     function (err) {
       if (err) {
         console.error("Client update failed:", err);
-        return res.status(500).json({ error: "Update failed" });
+
+        if (String(err.message || "").includes("UNIQUE constraint failed: clients.phone")) {
+          return res.status(409).json({ error: "That phone number already exists as a client." });
+        }
+
+        return res.status(500).json({ error: "Update failed." });
       }
 
-      db.get("SELECT * FROM clients WHERE id = ?", [id], (_, row) =>
-        res.json(row)
-      );
+      db.get("SELECT * FROM clients WHERE id = ?", [id], (_, row) => res.json(row));
     }
   );
 });
@@ -118,7 +147,7 @@ router.put("/:id/status", (req, res) => {
 
   db.run(
     "UPDATE clients SET status_id = ? WHERE id = ?",
-    [status_id, req.params.id],
+    [status_id || null, req.params.id],
     (err) => {
       if (err) {
         console.error("Status update failed:", err);
@@ -129,12 +158,18 @@ router.put("/:id/status", (req, res) => {
   );
 });
 
-// DELETE client
+// DELETE client (and messages)
 router.delete("/:id", (req, res) => {
-  db.run("DELETE FROM messages WHERE client_id = ?", [req.params.id]);
-  db.run("DELETE FROM clients WHERE id = ?", [req.params.id], (err) => {
-    if (err) return res.status(500).json({ error: "Delete failed" });
-    res.json({ success: true });
+  db.run("DELETE FROM messages WHERE client_id = ?", [req.params.id], (err1) => {
+    if (err1) console.error("Delete messages failed:", err1);
+
+    db.run("DELETE FROM clients WHERE id = ?", [req.params.id], (err2) => {
+      if (err2) {
+        console.error("Delete client failed:", err2);
+        return res.status(500).json({ error: "Delete failed" });
+      }
+      res.json({ success: true });
+    });
   });
 });
 
