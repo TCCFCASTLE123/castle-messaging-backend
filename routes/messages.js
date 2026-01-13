@@ -5,7 +5,7 @@ const normalizePhone = require("../utils/normalizePhone");
 const twilio = require("twilio");
 
 /**
- * Twilio client (server-side only)
+ * Twilio client (server-side)
  */
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -18,7 +18,7 @@ const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
  * Query:
  *   - ?client_id=123  OR
  *   - ?phone=6025551234
- * Returns newest-last (ASC) for chat rendering
+ * Returns oldest-first (ASC) for chat rendering
  */
 router.get("/", (req, res) => {
   const clientId = req.query.client_id ? String(req.query.client_id).trim() : "";
@@ -32,7 +32,7 @@ router.get("/", (req, res) => {
   const runQueryByClientId = (id) => {
     db.all(
       `
-      SELECT id, client_id, sender, text, direction, timestamp, external_id, phone
+      SELECT id, client_id, sender, text, direction, timestamp, external_id
       FROM messages
       WHERE client_id = ?
       ORDER BY datetime(timestamp) ASC, id ASC
@@ -56,7 +56,7 @@ router.get("/", (req, res) => {
       console.error("❌ client lookup by phone failed:", err.message);
       return res.status(500).json({ ok: false, error: err.message });
     }
-    if (!row) return res.json([]); // no client yet, return empty history
+    if (!row) return res.json([]); // no client yet
     runQueryByClientId(row.id);
   });
 });
@@ -70,7 +70,7 @@ router.get("/conversation/:client_id", (req, res) => {
 
   db.all(
     `
-    SELECT id, client_id, sender, text, direction, timestamp, external_id, phone
+    SELECT id, client_id, sender, text, direction, timestamp, external_id
     FROM messages
     WHERE client_id = ?
     ORDER BY datetime(timestamp) ASC, id ASC
@@ -110,8 +110,8 @@ router.post("/note", (req, res) => {
     const ts = new Date().toISOString();
 
     db.run(
-      "INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id, phone) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      [row.id, sender, text, "outbound", ts, null, phone],
+      "INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id) VALUES (?, ?, ?, ?, ?, ?)",
+      [row.id, sender, text, "outbound", ts, null],
       function (msgErr) {
         if (msgErr) {
           console.error("❌ note insert failed:", msgErr.message);
@@ -141,7 +141,7 @@ router.post("/note", (req, res) => {
  * POST /api/messages/send
  * Sends an outbound SMS via Twilio + saves to DB + emits socket event
  *
- * Body can be either:
+ * Body:
  *   { client_id, text, sender? }
  * OR
  *   { phone, text, sender? }
@@ -155,51 +155,35 @@ router.post("/send", async (req, res) => {
     const phoneRaw = req.body.phone ? String(req.body.phone).trim() : "";
     const phoneNormalized = phoneRaw ? normalizePhone(phoneRaw) : "";
 
-    if (!text) {
-      return res.status(400).json({ ok: false, error: "Missing text" });
-    }
+    if (!text) return res.status(400).json({ ok: false, error: "Missing text" });
 
-    // Resolve client_id + phone
     const resolveClient = () =>
       new Promise((resolve, reject) => {
         if (clientIdRaw) {
-          db.get(
-            "SELECT id, phone FROM clients WHERE id = ?",
-            [clientIdRaw],
-            (err, row) => {
-              if (err) return reject(err);
-              return resolve(row || null);
-            }
-          );
+          db.get("SELECT id, phone FROM clients WHERE id = ?", [clientIdRaw], (err, row) => {
+            if (err) return reject(err);
+            resolve(row || null);
+          });
         } else if (phoneNormalized) {
-          db.get(
-            "SELECT id, phone FROM clients WHERE phone = ?",
-            [phoneNormalized],
-            (err, row) => {
-              if (err) return reject(err);
-              return resolve(row || null);
-            }
-          );
+          db.get("SELECT id, phone FROM clients WHERE phone = ?", [phoneNormalized], (err, row) => {
+            if (err) return reject(err);
+            resolve(row || null);
+          });
         } else {
           resolve(null);
         }
       });
 
     const clientRow = await resolveClient();
-
     if (!clientRow) {
-      return res.status(404).json({
-        ok: false,
-        error: "Client not found (need client_id or phone that matches an existing client)",
-      });
+      return res.status(404).json({ ok: false, error: "Client not found" });
     }
 
     const client_id = clientRow.id;
     const to = normalizePhone(clientRow.phone);
 
-    if (!to) {
-      return res.status(400).json({ ok: false, error: "Client phone is invalid" });
-    }
+    if (!to) return res.status(400).json({ ok: false, error: "Client phone is invalid" });
+    if (!twilioFrom) return res.status(500).json({ ok: false, error: "TWILIO_PHONE_NUMBER missing" });
 
     // Send via Twilio
     const sent = await twilioClient.messages.create({
@@ -210,25 +194,20 @@ router.post("/send", async (req, res) => {
 
     const ts = new Date().toISOString();
 
-    // Save to DB
-    const insert = () =>
-      new Promise((resolve, reject) => {
-        db.run(
-          "INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id, phone) VALUES (?, ?, ?, ?, ?, ?, ?)",
-          [client_id, sender, text, "outbound", ts, sent.sid, to],
-          function (err) {
-            if (err) return reject(err);
-            resolve(this.lastID);
-          }
-        );
-      });
+    const insertId = await new Promise((resolve, reject) => {
+      db.run(
+        "INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id) VALUES (?, ?, ?, ?, ?, ?)",
+        [client_id, sender, text, "outbound", ts, sent.sid],
+        function (err) {
+          if (err) return reject(err);
+          resolve(this.lastID);
+        }
+      );
+    });
 
-    const id = await insert();
-
-    // Emit real-time update
     if (req.io) {
       req.io.emit("message", {
-        id,
+        id: insertId,
         client_id,
         phone: to,
         sender,
@@ -242,7 +221,7 @@ router.post("/send", async (req, res) => {
     return res.json({
       ok: true,
       message: {
-        id,
+        id: insertId,
         client_id,
         phone: to,
         sender,
