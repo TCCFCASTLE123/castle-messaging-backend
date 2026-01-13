@@ -1,16 +1,12 @@
-// db.js — CLEAN + SELF-MIGRATING (with UNIQUE phone index)
+// db.js — CLEAN + SELF-MIGRATING (with UNIQUE phone index + CALL/DAILY statuses)
 const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
 
-// SQLite file (use Render Disk later if you want persistence)
 const DB_PATH = path.join(__dirname, "database.sqlite");
 
 const db = new sqlite3.Database(DB_PATH, (err) => {
-  if (err) {
-    console.error("❌ SQLite connection failed:", err.message);
-  } else {
-    console.log("✅ SQLite connected:", DB_PATH);
-  }
+  if (err) console.error("❌ SQLite connection failed:", err.message);
+  else console.log("✅ SQLite connected:", DB_PATH);
 });
 
 function tableColumns(table) {
@@ -42,9 +38,6 @@ function run(sql, params = []) {
 }
 
 db.serialize(() => {
-  /* =========================
-     CLIENTS
-  ========================= */
   db.run(`
     CREATE TABLE IF NOT EXISTS clients (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,9 +49,6 @@ db.serialize(() => {
     )
   `);
 
-  /* =========================
-     MESSAGES (Twilio-critical)
-  ========================= */
   db.run(`
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,9 +62,6 @@ db.serialize(() => {
     )
   `);
 
-  /* =========================
-     USERS / AUTH
-  ========================= */
   db.run(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,9 +71,6 @@ db.serialize(() => {
     )
   `);
 
-  /* =========================
-     STATUSES
-  ========================= */
   db.run(`
     CREATE TABLE IF NOT EXISTS statuses (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,9 +78,6 @@ db.serialize(() => {
     )
   `);
 
-  /* =========================
-     TEMPLATES
-  ========================= */
   db.run(`
     CREATE TABLE IF NOT EXISTS templates (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -105,9 +86,6 @@ db.serialize(() => {
     )
   `);
 
-  /* =========================
-     SCHEDULED MESSAGES
-  ========================= */
   db.run(`
     CREATE TABLE IF NOT EXISTS scheduled_messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -120,29 +98,31 @@ db.serialize(() => {
   `);
 });
 
-// Run migrations after base tables exist
 (async () => {
   try {
-    // ---- Clients: add the fields your UI/workflow needs
+    // Core client fields your UI/workflow needs
     await addColumnIfMissing("clients", "office", "TEXT");
-    await addColumnIfMissing("clients", "status", "TEXT");
+    await addColumnIfMissing("clients", "status", "TEXT"); // optional unified status if you want
     await addColumnIfMissing("clients", "case_type", "TEXT");
     await addColumnIfMissing("clients", "appointment_at", "TEXT");
+
+    // ✅ NEW: separate stage statuses
+    await addColumnIfMissing("clients", "call_status", "TEXT");
+    await addColumnIfMissing("clients", "daily_status", "TEXT");
+
     await addColumnIfMissing("clients", "created_at", "TEXT DEFAULT (datetime('now'))");
     await addColumnIfMissing("clients", "updated_at", "TEXT");
 
-    // ---- Messages: add commonly expected fields (optional)
+    // Messages optional extra columns
     await addColumnIfMissing("messages", "phone", "TEXT");
     await addColumnIfMissing("messages", "body", "TEXT");
     await addColumnIfMissing("messages", "twilio_sid", "TEXT");
     await addColumnIfMissing("messages", "delivery_status", "TEXT");
     await addColumnIfMissing("messages", "created_at", "TEXT DEFAULT (datetime('now'))");
 
-    // ✅ CRITICAL FIX: ensure phone is UNIQUE for ON CONFLICT(phone)
-    // Safe: allows multiple NULL phones, enforces uniqueness on real numbers
+    // ✅ Required for upsert ON CONFLICT(phone)
     await run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_phone_unique ON clients(phone)`);
 
-    // Helpful: show final schemas at boot
     const clientsCols = await tableColumns("clients");
     const messagesCols = await tableColumns("messages");
     console.log("📦 clients columns:", clientsCols.join(", "));
