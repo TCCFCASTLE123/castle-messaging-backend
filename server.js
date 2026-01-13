@@ -1,13 +1,14 @@
 /*******************************************************
- * Castle Consulting Messaging Backend — FULL server.js
+ * Castle Consulting Messaging Backend — UPDATED server.js
  * Backend: Node + Express + Socket.io + Twilio + Cron + SQLite
  *
  * ✅ CORS fixed for Render frontend + localhost
- * ✅ Preflight OPTIONS fixed (no more Network Error)
+ * ✅ Preflight OPTIONS fixed
  * ✅ Twilio inbound support (x-www-form-urlencoded)
  * ✅ Routes mounted under /api/*
  * ✅ req.io available inside route files
- * ✅ Keeps scheduled sender CRON
+ * ✅ Keeps scheduled sender CRON (FIXED to match DB schema)
+ * ✅ Adds Sheets webhook route mount
  *******************************************************/
 
 require("dotenv").config();
@@ -29,6 +30,9 @@ const templateRoutes = require("./routes/templates");
 const scheduledMessagesRoutes = require("./routes/scheduledMEssages"); // keep your existing filename
 const twilioRoutes = require("./routes/twilio");
 
+// ✅ NEW: Sheets webhook route
+const sheetsWebhookRoutes = require("./routes/sheetsWebhook");
+
 // DB
 const db = require("./db");
 
@@ -37,10 +41,9 @@ const app = express();
 const server = http.createServer(app);
 
 // -------------------- CORS --------------------
-// 🔥 PUT YOUR FRONTEND URL HERE (this is what fixes your error)
 const allowedOrigins = [
   "http://localhost:3000",
-  "http://localhost:5000", // optional, harmless
+  "http://localhost:5000",
   "https://castle-consulting-firm-messaging.onrender.com",
 ];
 
@@ -56,7 +59,8 @@ app.use(
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    // ✅ FIX: include custom headers used by your app/webhooks
+    allowedHeaders: ["Content-Type", "Authorization", "x-api-key", "x-webhook-key"],
   })
 );
 
@@ -122,6 +126,9 @@ app.use("/api/templates", templateRoutes);
 app.use("/api/scheduled_messages", scheduledMessagesRoutes);
 app.use("/api/twilio", twilioRoutes);
 
+// ✅ NEW: Google Sheets webhook (Apps Script -> Backend)
+app.use("/api/sheets", sheetsWebhookRoutes);
+
 // -------------------- HOME --------------------
 app.get("/", (req, res) => {
   res.send("Castle Consulting Messaging API is running!");
@@ -134,16 +141,20 @@ io.on("connection", (socket) => {
 
 // =====================================================
 // --- SCHEDULED MESSAGE SENDER (runs every minute) ---
+// FIXED to match your db.js schema:
+// scheduled_messages has: message, send_at, sent
 // =====================================================
 cron.schedule("* * * * *", () => {
-  const now = Date.now();
-
   db.all(
-    `SELECT sm.*, c.phone 
-     FROM scheduled_messages sm 
-     LEFT JOIN clients c ON sm.client_id = c.id 
-     WHERE sm.send_time <= ? AND (sm.sent IS NULL OR sm.sent = 0)`,
-    [now],
+    `
+    SELECT sm.*, c.phone
+    FROM scheduled_messages sm
+    LEFT JOIN clients c ON sm.client_id = c.id
+    WHERE (sm.sent IS NULL OR sm.sent = 0)
+      AND sm.send_at IS NOT NULL
+      AND datetime(sm.send_at) <= datetime('now')
+    `,
+    [],
     (err, rows) => {
       if (err) {
         console.error("Scheduled message check failed:", err);
@@ -155,46 +166,29 @@ cron.schedule("* * * * *", () => {
         return;
       }
 
-      console.log(
-        "== CRON JOB FIRING ==",
-        rows.length,
-        "scheduled messages to send"
-      );
+      console.log("== CRON JOB FIRING ==", rows.length, "scheduled messages to send");
 
       rows.forEach((msg) => {
         const normPhone = normalizePhone(msg.phone);
         if (!normPhone) {
-          console.warn(
-            "Scheduled message missing/invalid client phone for client_id:",
-            msg.client_id
-          );
+          console.warn("Scheduled message missing/invalid client phone for client_id:", msg.client_id);
           return;
         }
 
-        console.log(
-          "About to send scheduled SMS for client_id:",
-          msg.client_id,
-          "text:",
-          msg.text
-        );
+        console.log("About to send scheduled SMS for client_id:", msg.client_id, "message:", msg.message);
 
-        sendSms(normPhone, msg.text, (twilioErr, sid) => {
+        sendSms(normPhone, msg.message, (twilioErr, sid) => {
           const ts = new Date().toISOString();
 
           if (twilioErr) {
-            console.error(
-              "Scheduled message Twilio send failed for scheduled_messages.id:",
-              msg.id,
-              twilioErr
-            );
-            // (optional) you could mark it failed in DB here
+            console.error("Scheduled message Twilio send failed for scheduled_messages.id:", msg.id, twilioErr);
             return;
           }
 
           // Save outbound message (so it shows in React)
           db.run(
-            "INSERT INTO messages (client_id, sender, text, direction, timestamp) VALUES (?, ?, ?, ?, ?)",
-            [msg.client_id, "system", msg.text, "outbound", ts],
+            "INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id) VALUES (?, ?, ?, ?, ?, ?)",
+            [msg.client_id, "system", msg.message, "outbound", ts, sid || null],
             function (insertErr) {
               if (insertErr) {
                 console.error("Scheduled message DB insert failed:", insertErr);
@@ -207,10 +201,7 @@ cron.schedule("* * * * *", () => {
                 [msg.id],
                 (updateErr) => {
                   if (updateErr) {
-                    console.error(
-                      "Failed to update scheduled_messages as sent:",
-                      updateErr
-                    );
+                    console.error("Failed to update scheduled_messages as sent:", updateErr);
                   }
                 }
               );
@@ -219,16 +210,13 @@ cron.schedule("* * * * *", () => {
               io.emit("message", {
                 client_id: msg.client_id,
                 sender: "system",
-                text: msg.text,
+                text: msg.message,
                 direction: "outbound",
                 timestamp: ts,
                 twilio_sid: sid || null,
               });
 
-              console.log(
-                "Scheduled message inserted to messages table! RowID:",
-                this.lastID
-              );
+              console.log("Scheduled message inserted to messages table! RowID:", this.lastID);
             }
           );
         });
@@ -242,6 +230,3 @@ const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
