@@ -2,9 +2,23 @@ const express = require("express");
 const router = express.Router();
 const twilio = require("twilio");
 const db = require("../db");
-const normalizePhone = require("../utils/normalizePhone");
 
 const MessagingResponse = twilio.twiml.MessagingResponse;
+
+// Match the exact same format you store in clients.phone (10 digits)
+function canonicalPhone(input) {
+  if (!input) return "";
+  const digits = String(input).replace(/\D/g, "");
+  if (digits.length === 11 && digits.startsWith("1")) return digits.slice(1);
+  return digits;
+}
+
+function toE164FromCanonical(canon10) {
+  if (!canon10) return "";
+  const digits = String(canon10).replace(/\D/g, "");
+  if (digits.length !== 10) return "";
+  return `+1${digits}`;
+}
 
 /**
  * POST /api/twilio/inbound
@@ -12,11 +26,9 @@ const MessagingResponse = twilio.twiml.MessagingResponse;
  * Body includes: From, To, Body, MessageSid
  */
 router.post("/inbound", async (req, res) => {
-  // Always respond with TwiML (Twilio-friendly)
   res.type("text/xml");
 
   try {
-    // ✅ log FIRST so we can see hits even if Twilio retries
     console.log("📩 INBOUND HIT:", {
       From: req.body.From,
       To: req.body.To,
@@ -24,33 +36,42 @@ router.post("/inbound", async (req, res) => {
       MessageSid: req.body.MessageSid,
     });
 
-    const from = normalizePhone(req.body.From || "");
+    const fromCanon = canonicalPhone(req.body.From || "");
+    const fromE164 = toE164FromCanonical(fromCanon); // for UI display if you want
     const body = (req.body.Body || "").trim();
     const sid = req.body.MessageSid || null;
 
-    if (!from || !body) {
-      console.log("⚠️ Inbound missing From or Body (normalized From:", from, ")");
+    if (!fromCanon || fromCanon.length !== 10 || !body) {
+      console.log("⚠️ Inbound missing/invalid From or Body:", {
+        fromCanon,
+        bodyLen: body?.length || 0,
+      });
       const twiml = new MessagingResponse();
       return res.status(200).send(twiml.toString());
     }
 
-    // 1) Find client by phone, or create a minimal placeholder client
+    // 1) Find client by canonical phone (10 digits)
     const clientRow = await new Promise((resolve, reject) => {
-      db.get("SELECT id, phone, name FROM clients WHERE phone = ?", [from], (err, row) => {
-        if (err) return reject(err);
-        resolve(row || null);
-      });
+      db.get(
+        "SELECT id, phone, name FROM clients WHERE phone = ?",
+        [fromCanon],
+        (err, row) => {
+          if (err) return reject(err);
+          resolve(row || null);
+        }
+      );
     });
 
     let client_id = clientRow?.id;
 
+    // 2) If not found, create placeholder using canonical phone (matches your schema)
     if (!client_id) {
       const createdAt = new Date().toISOString();
       client_id = await new Promise((resolve, reject) => {
         db.run(
           `INSERT INTO clients (name, phone, created_at)
            VALUES (?, ?, ?)`,
-          [`Inbound ${from}`, from, createdAt],
+          [`Inbound ${fromE164 || fromCanon}`, fromCanon, createdAt],
           function (err) {
             if (err) return reject(err);
             resolve(this.lastID);
@@ -58,10 +79,13 @@ router.post("/inbound", async (req, res) => {
         );
       });
 
-      console.log("✅ Created placeholder client for inbound:", { client_id, phone: from });
+      console.log("✅ Created placeholder client for inbound:", {
+        client_id,
+        phone: fromCanon,
+      });
     }
 
-    // 2) Insert inbound message (matches your schema: no phone column)
+    // 3) Insert inbound message (your messages table has no phone column)
     const ts = new Date().toISOString();
 
     const messageId = await new Promise((resolve, reject) => {
@@ -76,12 +100,13 @@ router.post("/inbound", async (req, res) => {
       );
     });
 
-    // 3) Emit for live UI update
+    // 4) Emit for live UI update
     if (req.io) {
       req.io.emit("message", {
         id: messageId,
         client_id,
-        phone: from, // useful for UI, even if not stored in messages table
+        phone: fromE164 || fromCanon, // show +1... in UI, fallback to digits
+        phone_canonical: fromCanon,
         sender: "client",
         text: body,
         direction: "inbound",
@@ -97,7 +122,7 @@ router.post("/inbound", async (req, res) => {
   } catch (err) {
     console.error("❌ Twilio inbound handler failed:", err);
     const twiml = new MessagingResponse();
-    return res.status(200).send(twiml.toString()); // still 200 so Twilio doesn't hammer retries
+    return res.status(200).send(twiml.toString());
   }
 });
 
