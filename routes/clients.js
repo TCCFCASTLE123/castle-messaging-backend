@@ -22,6 +22,10 @@ function withTimeout(res, label, ms = 12000) {
 
 /**
  * GET /api/clients
+ * ✅ Phone-style ordering:
+ *   - most recently messaged clients at top
+ *   - null last_message_at go to bottom
+ *   - fallback to id desc
  */
 router.get("/", (req, res) => {
   const clear = withTimeout(res, "GET /api/clients");
@@ -31,7 +35,10 @@ router.get("/", (req, res) => {
       SELECT c.*, s.name AS status_name
       FROM clients c
       LEFT JOIN statuses s ON c.status_id = s.id
-      ORDER BY c.id DESC
+      ORDER BY
+        CASE WHEN c.last_message_at IS NULL OR c.last_message_at = '' THEN 1 ELSE 0 END,
+        datetime(c.last_message_at) DESC,
+        c.id DESC
     `,
     [],
     (err, rows) => {
@@ -75,7 +82,6 @@ router.post("/", (req, res) => {
       return res.status(400).json({ error: "Phone number is required (10 digits)" });
     }
 
-    // If your DB has UNIQUE(phone), this prevents duplicates cleanly
     db.get("SELECT id FROM clients WHERE phone = ?", [cleanPhone], (lookupErr, row) => {
       if (lookupErr) {
         clear();
@@ -132,7 +138,6 @@ router.post("/", (req, res) => {
 });
 
 /**
-/**
  * PATCH /api/clients/:id
  * Partial update (only fields provided are updated)
  */
@@ -153,7 +158,6 @@ router.patch("/:id", (req, res) => {
       AppointmentScheduledDate,
     } = req.body || {};
 
-    // 1) Load existing client so we can support partial updates
     db.get("SELECT * FROM clients WHERE id = ?", [id], (getErr, existing) => {
       if (getErr) {
         clear();
@@ -165,7 +169,6 @@ router.patch("/:id", (req, res) => {
         return res.status(404).json({ error: "Client not found" });
       }
 
-      // 2) Merge: use provided fields, otherwise keep existing
       const mergedName = name !== undefined ? String(name).trim() : (existing.name || "");
       const mergedPhone = phone !== undefined ? canonicalPhone(phone) : (existing.phone || "");
 
@@ -178,7 +181,6 @@ router.patch("/:id", (req, res) => {
         ? (AppointmentScheduledDate || null)
         : existing.appointment_datetime;
 
-      // 3) Validate final values (not just what the frontend sent)
       if (!mergedName) {
         clear();
         return res.status(400).json({ error: "Name is required" });
@@ -188,7 +190,6 @@ router.patch("/:id", (req, res) => {
         return res.status(400).json({ error: "Phone number is required (10 digits)" });
       }
 
-      // 4) Prevent updating into someone else's phone
       db.get(
         "SELECT id FROM clients WHERE phone = ? AND id != ?",
         [mergedPhone, id],
@@ -204,7 +205,6 @@ router.patch("/:id", (req, res) => {
             return res.status(409).json({ error: "That phone number already exists as a client." });
           }
 
-          // 5) Update row
           db.run(
             `
               UPDATE clients SET
@@ -256,7 +256,6 @@ router.patch("/:id", (req, res) => {
   }
 });
 
-
 /**
  * PUT /api/clients/:id/status
  */
@@ -266,18 +265,14 @@ router.put("/:id/status", (req, res) => {
   const id = req.params.id;
   const { status_id } = req.body || {};
 
-  db.run(
-    "UPDATE clients SET status_id = ? WHERE id = ?",
-    [status_id || null, id],
-    (err) => {
-      clear();
-      if (err) {
-        console.error("❌ Status update failed:", err);
-        return res.status(500).json({ success: false, error: "Status update failed" });
-      }
-      return res.json({ success: true });
+  db.run("UPDATE clients SET status_id = ? WHERE id = ?", [status_id || null, id], (err) => {
+    clear();
+    if (err) {
+      console.error("❌ Status update failed:", err);
+      return res.status(500).json({ success: false, error: "Status update failed" });
     }
-  );
+    return res.json({ success: true });
+  });
 });
 
 /**
@@ -303,4 +298,3 @@ router.delete("/:id", (req, res) => {
 });
 
 module.exports = router;
-
