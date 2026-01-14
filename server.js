@@ -28,8 +28,7 @@ const db = require("./db");
 const app = express();
 const server = http.createServer(app);
 
-const authRoutes = require("./routes/auth");
-app.use("/api/auth", authRoutes);
+
 
 // -------------------- LOGGING --------------------
 app.use((req, res, next) => {
@@ -134,4 +133,5 @@ const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
