@@ -1,32 +1,55 @@
-const express = require('express');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const db = require('../db.js');
+// routes/auth.js
+const express = require("express");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const db = require("../db.js");
+
 const router = express.Router();
 
-// Register a new user
-router.post('/register', async (req, res) => {
-  const { username, password } = req.body;
-  db.get('SELECT * FROM users WHERE username = ?', [username], async (err, user) => {
-    if (user) return res.status(400).json({ message: 'User already exists.' });
-    const hashedPassword = await bcrypt.hash(password, 10);
-    db.run('INSERT INTO users (username, password) VALUES (?, ?)', [username, hashedPassword], function(err) {
-      if (err) return res.status(500).json({ message: 'Error registering user.' });
-      res.status(201).json({ id: this.lastID, username });
-    });
+// --- middleware inline (keep it simple) ---
+function requireAuth(req, res, next) {
+  try {
+    const header = req.headers.authorization || "";
+    const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+    if (!token) return res.status(401).json({ message: "Missing token" });
+
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = payload; // { id, username, role }
+    next();
+  } catch (e) {
+    return res.status(401).json({ message: "Invalid/expired token" });
+  }
+}
+
+// Login user
+router.post("/login", (req, res) => {
+  const username = (req.body.username || "").trim().toLowerCase();
+  const password = req.body.password || "";
+
+  if (!username || !password) {
+    return res.status(400).json({ message: "Username and password required." });
+  }
+
+  db.get("SELECT * FROM users WHERE username = ?", [username], async (err, user) => {
+    if (err) return res.status(500).json({ message: "DB error." });
+    if (!user) return res.status(400).json({ message: "Invalid credentials." });
+
+    const valid = await bcrypt.compare(password, user.password_hash);
+    if (!valid) return res.status(400).json({ message: "Invalid credentials." });
+
+    const token = jwt.sign(
+      { id: user.id, username: user.username, role: user.role || "user" },
+      process.env.JWT_SECRET,
+      { expiresIn: "8h" }
+    );
+
+    res.json({ token, username: user.username, role: user.role || "user" });
   });
 });
 
-// Login user
-router.post('/login', (req, res) => {
-  const { username, password } = req.body;
-  db.get('SELECT * FROM users WHERE username = ?', [username], async (err, user) => {
-    if (!user) return res.status(400).json({ message: 'Invalid credentials.' });
-    const valid = await bcrypt.compare(password, user.password);
-    if (!valid) return res.status(400).json({ message: 'Invalid credentials.' });
-    const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, process.env.JWT_SECRET, { expiresIn: '8h' });
-    res.json({ token, username: user.username, role: user.role });
-  });
+// Verify token / current user
+router.get("/me", requireAuth, (req, res) => {
+  res.json({ user: req.user });
 });
 
 module.exports = router;
