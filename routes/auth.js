@@ -1,4 +1,3 @@
-// routes/auth.js
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -6,7 +5,6 @@ const db = require("../db.js");
 
 const router = express.Router();
 
-// --- middleware inline (keep it simple) ---
 function requireAuth(req, res, next) {
   try {
     const header = req.headers.authorization || "";
@@ -21,7 +19,7 @@ function requireAuth(req, res, next) {
   }
 }
 
-// Login user
+// LOGIN
 router.post("/login", (req, res) => {
   const username = (req.body.username || "").trim().toLowerCase();
   const password = req.body.password || "";
@@ -43,11 +41,11 @@ router.post("/login", (req, res) => {
       { expiresIn: "8h" }
     );
 
-    res.json({ token, username: user.username, role: user.role || "user" });
+    return res.json({ token, username: user.username, role: user.role || "user" });
   });
 });
 
-// Verify token / current user
+// ME (verify token)
 router.get("/me", requireAuth, (req, res) => {
   res.json({ user: req.user });
 });
