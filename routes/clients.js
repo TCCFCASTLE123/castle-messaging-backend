@@ -1,3 +1,5 @@
+// routes/clients.js — HARDENED + PATCH DOES NOT WIPE SYNCED FIELDS
+
 const express = require("express");
 const router = express.Router();
 const db = require("../db");
@@ -9,6 +11,14 @@ function canonicalPhone(input) {
   return digits;
 }
 
+// Treat "" as "not provided" for PATCH so we don't wipe existing synced fields.
+function cleanPatchValue(v) {
+  if (v === undefined) return undefined; // not provided
+  if (v === "") return undefined;        // ignore blank strings
+  return v;
+}
+
+// Optional: prevents "pending forever" if sqlite is locked
 function withTimeout(res, label, ms = 12000) {
   const t = setTimeout(() => {
     console.error(`❌ ${label} timed out after ${ms}ms`);
@@ -40,7 +50,7 @@ router.get("/", (req, res) => {
         console.error("❌ GET clients failed:", err);
         return res.status(500).json({ error: "Failed to load clients" });
       }
-      res.json(rows || []);
+      return res.json(rows || []);
     }
   );
 });
@@ -122,13 +132,13 @@ router.post("/", (req, res) => {
             return res.status(500).json({ error: "Insert failed" });
           }
 
-          db.get("SELECT * FROM clients WHERE id = ?", [this.lastID], (gErr, row) => {
+          db.get("SELECT * FROM clients WHERE id = ?", [this.lastID], (gErr, row2) => {
             clear();
             if (gErr) {
               console.error(gErr);
               return res.status(500).json({ error: "Fetch failed" });
             }
-            res.json(row);
+            return res.json(row2);
           });
         }
       );
@@ -136,12 +146,13 @@ router.post("/", (req, res) => {
   } catch (e) {
     clear();
     console.error(e);
-    res.status(500).json({ error: "Server error" });
+    return res.status(500).json({ error: "Server error" });
   }
 });
 
 /**
  * PATCH /api/clients/:id
+ * ✅ IMPORTANT: does NOT overwrite existing values with "" (blank strings)
  */
 router.patch("/:id", (req, res) => {
   const clear = withTimeout(res, "PATCH /api/clients/:id");
@@ -161,22 +172,30 @@ router.patch("/:id", (req, res) => {
 
       const body = req.body || {};
 
+      // Only apply values if they are actually provided and not ""
+      const nameVal = cleanPatchValue(body.name);
+      const phoneVal = cleanPatchValue(body.phone);
+
       const merged = {
-        name: body.name !== undefined ? body.name.trim() : existing.name,
-        phone: body.phone !== undefined ? canonicalPhone(body.phone) : existing.phone,
-        email: body.email !== undefined ? body.email : existing.email,
-        notes: body.notes !== undefined ? body.notes : existing.notes,
-        language: body.language !== undefined ? body.language : existing.language,
-        office: body.office !== undefined ? body.office : existing.office,
-        case_type: body.case_type !== undefined ? body.case_type : existing.case_type,
-        case_subtype: body.case_subtype !== undefined ? body.case_subtype : existing.case_subtype,
-        appt_setter: body.appt_setter !== undefined ? body.appt_setter : existing.appt_setter,
+        name: nameVal !== undefined ? String(nameVal).trim() : (existing.name || ""),
+        phone: phoneVal !== undefined ? canonicalPhone(phoneVal) : (existing.phone || ""),
+
+        email: cleanPatchValue(body.email) !== undefined ? body.email : existing.email,
+        notes: cleanPatchValue(body.notes) !== undefined ? body.notes : existing.notes,
+        language: cleanPatchValue(body.language) !== undefined ? body.language : existing.language,
+        office: cleanPatchValue(body.office) !== undefined ? body.office : existing.office,
+
+        case_type: cleanPatchValue(body.case_type) !== undefined ? body.case_type : existing.case_type,
+        case_subtype: cleanPatchValue(body.case_subtype) !== undefined ? body.case_subtype : existing.case_subtype,
+
+        appt_setter: cleanPatchValue(body.appt_setter) !== undefined ? body.appt_setter : existing.appt_setter,
         intake_coordinator:
-          body.intake_coordinator !== undefined
+          cleanPatchValue(body.intake_coordinator) !== undefined
             ? body.intake_coordinator
             : existing.intake_coordinator,
-        appt_date: body.appt_date !== undefined ? body.appt_date : existing.appt_date,
-        appt_time: body.appt_time !== undefined ? body.appt_time : existing.appt_time,
+
+        appt_date: cleanPatchValue(body.appt_date) !== undefined ? body.appt_date : existing.appt_date,
+        appt_time: cleanPatchValue(body.appt_time) !== undefined ? body.appt_time : existing.appt_time,
       };
 
       if (!merged.name || !merged.phone) {
@@ -229,13 +248,13 @@ router.patch("/:id", (req, res) => {
                 return res.status(500).json({ error: "Update failed" });
               }
 
-              db.get("SELECT * FROM clients WHERE id = ?", [id], (fErr, row) => {
+              db.get("SELECT * FROM clients WHERE id = ?", [id], (fErr, row2) => {
                 clear();
                 if (fErr) {
                   console.error(fErr);
                   return res.status(500).json({ error: "Fetch failed" });
                 }
-                res.json(row);
+                return res.json(row2);
               });
             }
           );
@@ -245,7 +264,7 @@ router.patch("/:id", (req, res) => {
   } catch (e) {
     clear();
     console.error(e);
-    res.status(500).json({ error: "Server error" });
+    return res.status(500).json({ error: "Server error" });
   }
 });
 
@@ -262,7 +281,7 @@ router.put("/:id/status", (req, res) => {
       console.error(err);
       return res.status(500).json({ success: false });
     }
-    res.json({ success: true });
+    return res.json({ success: true });
   });
 });
 
@@ -279,7 +298,7 @@ router.delete("/:id", (req, res) => {
         console.error(err);
         return res.status(500).json({ error: "Delete failed" });
       }
-      res.json({ success: true });
+      return res.json({ success: true });
     });
   });
 });
