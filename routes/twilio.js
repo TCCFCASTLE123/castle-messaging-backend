@@ -37,7 +37,7 @@ router.post("/inbound", async (req, res) => {
     });
 
     const fromCanon = canonicalPhone(req.body.From || "");
-    const fromE164 = toE164FromCanonical(fromCanon); // for UI display if you want
+    const fromE164 = toE164FromCanonical(fromCanon);
     const body = (req.body.Body || "").trim();
     const sid = req.body.MessageSid || null;
 
@@ -63,15 +63,18 @@ router.post("/inbound", async (req, res) => {
     });
 
     let client_id = clientRow?.id;
+    let client_name = clientRow?.name || null;
 
     // 2) If not found, create placeholder using canonical phone (matches your schema)
     if (!client_id) {
       const createdAt = new Date().toISOString();
+      const placeholderName = `Inbound ${fromE164 || fromCanon}`;
+
       client_id = await new Promise((resolve, reject) => {
         db.run(
           `INSERT INTO clients (name, phone, created_at)
            VALUES (?, ?, ?)`,
-          [`Inbound ${fromE164 || fromCanon}`, fromCanon, createdAt],
+          [placeholderName, fromCanon, createdAt],
           function (err) {
             if (err) return reject(err);
             resolve(this.lastID);
@@ -79,13 +82,15 @@ router.post("/inbound", async (req, res) => {
         );
       });
 
+      client_name = placeholderName;
+
       console.log("✅ Created placeholder client for inbound:", {
         client_id,
         phone: fromCanon,
       });
     }
 
-    // 3) Insert inbound message (your messages table has no phone column)
+    // 3) Insert inbound message
     const ts = new Date().toISOString();
 
     const messageId = await new Promise((resolve, reject) => {
@@ -101,18 +106,23 @@ router.post("/inbound", async (req, res) => {
     });
 
     // 4) Emit for live UI update
+    const payload = {
+      id: messageId,
+      client_id,
+      client_name: client_name || undefined,
+      phone: fromE164 || fromCanon,
+      phone_canonical: fromCanon,
+      sender: "client",
+      text: body,
+      direction: "inbound",
+      timestamp: ts,
+      external_id: sid,
+    };
+
     if (req.io) {
-      req.io.emit("message", {
-        id: messageId,
-        client_id,
-        phone: fromE164 || fromCanon, // show +1... in UI, fallback to digits
-        phone_canonical: fromCanon,
-        sender: "client",
-        text: body,
-        direction: "inbound",
-        timestamp: ts,
-        external_id: sid,
-      });
+      // ✅ emit BOTH names so older frontends still work
+      req.io.emit("newMessage", payload);
+      req.io.emit("message", payload);
     } else {
       console.log("⚠️ req.io not present; cannot emit live update");
     }
