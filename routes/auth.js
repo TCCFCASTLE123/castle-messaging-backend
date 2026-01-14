@@ -32,7 +32,11 @@ router.post("/login", (req, res) => {
     if (err) return res.status(500).json({ message: "DB error." });
     if (!user) return res.status(400).json({ message: "Invalid credentials." });
 
-    const valid = await bcrypt.compare(password, user.password_hash);
+    // ✅ FIX: your column is "password" (NOT password_hash)
+    const hash = user.password || user.password_hash; // supports either schema
+    if (!hash) return res.status(500).json({ message: "User record missing password hash." });
+
+    const valid = await bcrypt.compare(password, hash);
     if (!valid) return res.status(400).json({ message: "Invalid credentials." });
 
     const token = jwt.sign(
