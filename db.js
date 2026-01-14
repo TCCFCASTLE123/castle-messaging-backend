@@ -10,33 +10,11 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 });
 
 db.serialize(() => {
-  // Prevent "database is locked" issues that look like pending requests
   db.run("PRAGMA journal_mode = WAL;");
   db.run("PRAGMA synchronous = NORMAL;");
   db.run("PRAGMA foreign_keys = ON;");
   db.run("PRAGMA busy_timeout = 8000;");
 
-  /* =========================
-     USERS (NEW)
-     - username UNIQUE
-     - password_hash (bcrypt)
-     - role: admin | user
-  ========================= */
-  db.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'user',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  db.run(`CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)`);
-
-  /* =========================
-     STATUSES
-  ========================= */
   db.run(`
     CREATE TABLE IF NOT EXISTS statuses (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,11 +41,6 @@ db.serialize(() => {
     db.run(`INSERT OR IGNORE INTO statuses (name) VALUES (?)`, [s]);
   });
 
-  /* =========================
-     CLIENTS
-     - phone is UNIQUE (fixes ON CONFLICT issues)
-     - includes status_id, office, case_type, appointment_datetime
-  ========================= */
   db.run(`
     CREATE TABLE IF NOT EXISTS clients (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,13 +54,12 @@ db.serialize(() => {
       appointment_datetime TEXT,
       status_id INTEGER,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_message_at TEXT,
+      last_message_text TEXT,
       FOREIGN KEY (status_id) REFERENCES statuses(id)
     )
   `);
 
-  /* =========================
-     MESSAGES
-  ========================= */
   db.run(`
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,23 +73,29 @@ db.serialize(() => {
     )
   `);
 
-  // Helpful boot logs
-  db.all("PRAGMA table_info(users)", (err, rows) => {
-    if (!err && rows) {
-      console.log("📦 users columns:", rows.map((r) => r.name).join(", "));
-    }
+  // ✅ Safe “add column if missing” for older DBs (Render disk keeps old schema)
+  db.all("PRAGMA table_info(clients)", (err, rows) => {
+    if (err || !rows) return;
+
+    const names = new Set(rows.map((r) => r.name));
+    const addCol = (name, type) => {
+      if (names.has(name)) return;
+      db.run(`ALTER TABLE clients ADD COLUMN ${name} ${type}`, (e) => {
+        if (e) console.error(`❌ ALTER clients add ${name} failed:`, e.message);
+        else console.log(`✅ Added clients.${name}`);
+      });
+    };
+
+    addCol("last_message_at", "TEXT");
+    addCol("last_message_text", "TEXT");
   });
 
   db.all("PRAGMA table_info(clients)", (err, rows) => {
-    if (!err && rows) {
-      console.log("📦 clients columns:", rows.map((r) => r.name).join(", "));
-    }
+    if (!err && rows) console.log("📦 clients columns:", rows.map((r) => r.name).join(", "));
   });
 
   db.all("PRAGMA table_info(messages)", (err, rows) => {
-    if (!err && rows) {
-      console.log("📦 messages columns:", rows.map((r) => r.name).join(", "));
-    }
+    if (!err && rows) console.log("📦 messages columns:", rows.map((r) => r.name).join(", "));
   });
 });
 
