@@ -5,7 +5,6 @@ const db = require("../db");
 
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
-// Match the exact same format you store in clients.phone (10 digits)
 function canonicalPhone(input) {
   if (!input) return "";
   const digits = String(input).replace(/\D/g, "");
@@ -20,11 +19,6 @@ function toE164FromCanonical(canon10) {
   return `+1${digits}`;
 }
 
-/**
- * POST /api/twilio/inbound
- * Twilio sends application/x-www-form-urlencoded
- * Body includes: From, To, Body, MessageSid
- */
 router.post("/inbound", async (req, res) => {
   res.type("text/xml");
 
@@ -42,39 +36,30 @@ router.post("/inbound", async (req, res) => {
     const sid = req.body.MessageSid || null;
 
     if (!fromCanon || fromCanon.length !== 10 || !body) {
-      console.log("⚠️ Inbound missing/invalid From or Body:", {
-        fromCanon,
-        bodyLen: body?.length || 0,
-      });
       const twiml = new MessagingResponse();
       return res.status(200).send(twiml.toString());
     }
 
-    // 1) Find client by canonical phone (10 digits)
     const clientRow = await new Promise((resolve, reject) => {
       db.get(
         "SELECT id, phone, name FROM clients WHERE phone = ?",
         [fromCanon],
-        (err, row) => {
-          if (err) return reject(err);
-          resolve(row || null);
-        }
+        (err, row) => (err ? reject(err) : resolve(row || null))
       );
     });
 
     let client_id = clientRow?.id;
     let client_name = clientRow?.name || null;
 
-    // 2) If not found, create placeholder using canonical phone (matches your schema)
     if (!client_id) {
       const createdAt = new Date().toISOString();
       const placeholderName = `Inbound ${fromE164 || fromCanon}`;
 
       client_id = await new Promise((resolve, reject) => {
         db.run(
-          `INSERT INTO clients (name, phone, created_at)
-           VALUES (?, ?, ?)`,
-          [placeholderName, fromCanon, createdAt],
+          `INSERT INTO clients (name, phone, created_at, last_message_at, last_message_text)
+           VALUES (?, ?, ?, ?, ?)`,
+          [placeholderName, fromCanon, createdAt, createdAt, body],
           function (err) {
             if (err) return reject(err);
             resolve(this.lastID);
@@ -83,14 +68,8 @@ router.post("/inbound", async (req, res) => {
       });
 
       client_name = placeholderName;
-
-      console.log("✅ Created placeholder client for inbound:", {
-        client_id,
-        phone: fromCanon,
-      });
     }
 
-    // 3) Insert inbound message
     const ts = new Date().toISOString();
 
     const messageId = await new Promise((resolve, reject) => {
@@ -105,7 +84,12 @@ router.post("/inbound", async (req, res) => {
       );
     });
 
-    // 4) Emit for live UI update
+    // ✅ Persist “phone-like ordering”
+    db.run(
+      `UPDATE clients SET last_message_at = ?, last_message_text = ? WHERE id = ?`,
+      [ts, body, client_id]
+    );
+
     const payload = {
       id: messageId,
       client_id,
@@ -120,11 +104,8 @@ router.post("/inbound", async (req, res) => {
     };
 
     if (req.io) {
-      // ✅ emit BOTH names so older frontends still work
       req.io.emit("newMessage", payload);
       req.io.emit("message", payload);
-    } else {
-      console.log("⚠️ req.io not present; cannot emit live update");
     }
 
     const twiml = new MessagingResponse();
