@@ -17,6 +17,24 @@ db.serialize(() => {
   db.run("PRAGMA busy_timeout = 8000;");
 
   /* =========================
+     USERS (NEW)
+     - username UNIQUE
+     - password_hash (bcrypt)
+     - role: admin | user
+  ========================= */
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'user',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.run(`CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)`);
+
+  /* =========================
      STATUSES
   ========================= */
   db.run(`
@@ -84,6 +102,12 @@ db.serialize(() => {
   `);
 
   // Helpful boot logs
+  db.all("PRAGMA table_info(users)", (err, rows) => {
+    if (!err && rows) {
+      console.log("📦 users columns:", rows.map((r) => r.name).join(", "));
+    }
+  });
+
   db.all("PRAGMA table_info(clients)", (err, rows) => {
     if (!err && rows) {
       console.log("📦 clients columns:", rows.map((r) => r.name).join(", "));
