@@ -52,14 +52,18 @@ router.get("/", (req, res) => {
   if (clientId) return runQueryByClientId(clientId);
 
   // If phone provided, translate to client_id first
-  db.get("SELECT id FROM clients WHERE phone = ?", [phone.replace(/\D/g, "").slice(-10)], (err, row) => {
-    if (err) {
-      console.error("❌ client lookup by phone failed:", err.message);
-      return res.status(500).json({ ok: false, error: err.message });
+  db.get(
+    "SELECT id FROM clients WHERE phone = ?",
+    [phone.replace(/\D/g, "").slice(-10)],
+    (err, row) => {
+      if (err) {
+        console.error("❌ client lookup by phone failed:", err.message);
+        return res.status(500).json({ ok: false, error: err.message });
+      }
+      if (!row) return res.json([]);
+      runQueryByClientId(row.id);
     }
-    if (!row) return res.json([]);
-    runQueryByClientId(row.id);
-  });
+  );
 });
 
 /**
@@ -107,16 +111,15 @@ router.post("/send", async (req, res) => {
     // Resolve client
     const clientRow = await new Promise((resolve, reject) => {
       if (clientIdRaw) {
-        db.get("SELECT id, phone FROM clients WHERE id = ?", [clientIdRaw], (err, row) => {
+        db.get("SELECT id, phone, name FROM clients WHERE id = ?", [clientIdRaw], (err, row) => {
           if (err) return reject(err);
           resolve(row || null);
         });
       } else {
-        // phone must match how you store it (10 digits in clients.phone)
         const canon10 = phoneRaw ? String(phoneRaw).replace(/\D/g, "").slice(-10) : "";
         if (!canon10) return resolve(null);
 
-        db.get("SELECT id, phone FROM clients WHERE phone = ?", [canon10], (err, row) => {
+        db.get("SELECT id, phone, name FROM clients WHERE phone = ?", [canon10], (err, row) => {
           if (err) return reject(err);
           resolve(row || null);
         });
@@ -161,18 +164,31 @@ router.post("/send", async (req, res) => {
       );
     });
 
+    // ✅ Persist “phone-like ordering” (so refresh keeps correct order)
+    db.run(
+      `UPDATE clients SET last_message_at = ?, last_message_text = ? WHERE id = ?`,
+      [ts, text, client_id],
+      (e) => {
+        if (e) console.error("❌ Update last_message_at failed:", e.message);
+      }
+    );
+
     // Emit live update
+    const payload = {
+      id: messageId,
+      client_id,
+      client_name: clientRow.name || undefined,
+      phone: to,
+      sender,
+      text,
+      direction: "outbound",
+      timestamp: ts,
+      external_id: sent.sid,
+    };
+
     if (req.io) {
-      req.io.emit("message", {
-        id: messageId,
-        client_id,
-        phone: to,
-        sender,
-        text,
-        direction: "outbound",
-        timestamp: ts,
-        external_id: sent.sid,
-      });
+      req.io.emit("newMessage", payload);
+      req.io.emit("message", payload);
     }
 
     return res.json({ ok: true, id: messageId, client_id, sid: sent.sid });
@@ -200,7 +216,7 @@ router.post("/note", (req, res) => {
     return res.status(400).json({ ok: false, error: "Missing phone or text" });
   }
 
-  db.get("SELECT id FROM clients WHERE phone = ?", [canon10], (err, row) => {
+  db.get("SELECT id, name FROM clients WHERE phone = ?", [canon10], (err, row) => {
     if (err) {
       console.error("❌ client lookup failed:", err.message);
       return res.status(500).json({ ok: false, error: err.message });
@@ -218,17 +234,30 @@ router.post("/note", (req, res) => {
           return res.status(500).json({ ok: false, error: msgErr.message });
         }
 
+        // ✅ Persist ordering for notes too
+        db.run(
+          `UPDATE clients SET last_message_at = ?, last_message_text = ? WHERE id = ?`,
+          [ts, text, row.id],
+          (e) => {
+            if (e) console.error("❌ Update last_message_at failed:", e.message);
+          }
+        );
+
+        const payload = {
+          id: this.lastID,
+          client_id: row.id,
+          client_name: row.name || undefined,
+          phone: `+1${canon10}`,
+          sender,
+          text,
+          direction: "outbound",
+          timestamp: ts,
+          external_id: null,
+        };
+
         if (req.io) {
-          req.io.emit("message", {
-            id: this.lastID,
-            client_id: row.id,
-            phone: `+1${canon10}`,
-            sender,
-            text,
-            direction: "outbound",
-            timestamp: ts,
-            external_id: null,
-          });
+          req.io.emit("newMessage", payload);
+          req.io.emit("message", payload);
         }
 
         res.json({ ok: true, id: this.lastID, client_id: row.id });
