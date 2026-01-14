@@ -1,5 +1,3 @@
-// routes/clients.js — HARDENED (no hanging requests)
-
 const express = require("express");
 const router = express.Router();
 const db = require("../db");
@@ -11,7 +9,6 @@ function canonicalPhone(input) {
   return digits;
 }
 
-// Optional: prevents "pending forever" if sqlite is locked
 function withTimeout(res, label, ms = 12000) {
   const t = setTimeout(() => {
     console.error(`❌ ${label} timed out after ${ms}ms`);
@@ -22,10 +19,6 @@ function withTimeout(res, label, ms = 12000) {
 
 /**
  * GET /api/clients
- * ✅ Phone-style ordering:
- *   - most recently messaged clients at top
- *   - null last_message_at go to bottom
- *   - fallback to id desc
  */
 router.get("/", (req, res) => {
   const clear = withTimeout(res, "GET /api/clients");
@@ -47,7 +40,7 @@ router.get("/", (req, res) => {
         console.error("❌ GET clients failed:", err);
         return res.status(500).json({ error: "Failed to load clients" });
       }
-      return res.json(rows || []);
+      res.json(rows || []);
     }
   );
 });
@@ -67,7 +60,11 @@ router.post("/", (req, res) => {
       language,
       office,
       case_type,
-      AppointmentScheduledDate,
+      case_subtype,
+      appt_setter,
+      intake_coordinator,
+      appt_date,
+      appt_time,
     } = req.body || {};
 
     const cleanName = (name || "").trim();
@@ -82,23 +79,27 @@ router.post("/", (req, res) => {
       return res.status(400).json({ error: "Phone number is required (10 digits)" });
     }
 
-    db.get("SELECT id FROM clients WHERE phone = ?", [cleanPhone], (lookupErr, row) => {
-      if (lookupErr) {
+    db.get("SELECT id FROM clients WHERE phone = ?", [cleanPhone], (err, row) => {
+      if (err) {
         clear();
-        console.error("❌ Client lookup failed:", lookupErr);
-        return res.status(500).json({ error: "Client lookup failed" });
+        console.error(err);
+        return res.status(500).json({ error: "Lookup failed" });
       }
-
-      if (row && row.id) {
+      if (row) {
         clear();
-        return res.status(409).json({ error: "That phone number already exists as a client." });
+        return res.status(409).json({ error: "That phone number already exists." });
       }
 
       db.run(
         `
           INSERT INTO clients
-          (name, phone, email, notes, language, office, case_type, appointment_datetime)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          (
+            name, phone, email, notes, language, office,
+            case_type, case_subtype,
+            appt_setter, intake_coordinator,
+            appt_date, appt_time
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           cleanName,
@@ -108,141 +109,133 @@ router.post("/", (req, res) => {
           language || "English",
           office || null,
           case_type || null,
-          AppointmentScheduledDate || null,
+          case_subtype || null,
+          appt_setter || null,
+          intake_coordinator || null,
+          appt_date || null,
+          appt_time || null,
         ],
         function (insertErr) {
           if (insertErr) {
             clear();
-            console.error("❌ Client insert failed:", insertErr);
-            return res.status(500).json({ error: "Failed to save client" });
+            console.error(insertErr);
+            return res.status(500).json({ error: "Insert failed" });
           }
 
-          const newId = this.lastID;
-
-          db.get("SELECT * FROM clients WHERE id = ?", [newId], (getErr, newRow) => {
+          db.get("SELECT * FROM clients WHERE id = ?", [this.lastID], (gErr, row) => {
             clear();
-            if (getErr) {
-              console.error("❌ Fetch inserted client failed:", getErr);
-              return res.status(500).json({ error: "Saved, but failed to fetch client" });
+            if (gErr) {
+              console.error(gErr);
+              return res.status(500).json({ error: "Fetch failed" });
             }
-            return res.json(newRow);
+            res.json(row);
           });
         }
       );
     });
   } catch (e) {
     clear();
-    console.error("❌ POST /api/clients crashed:", e);
-    return res.status(500).json({ error: "Server error creating client" });
+    console.error(e);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
 /**
  * PATCH /api/clients/:id
- * Partial update (only fields provided are updated)
  */
 router.patch("/:id", (req, res) => {
   const clear = withTimeout(res, "PATCH /api/clients/:id");
-
   const id = req.params.id;
 
   try {
-    const {
-      name,
-      phone,
-      email,
-      notes,
-      language,
-      office,
-      case_type,
-      AppointmentScheduledDate,
-    } = req.body || {};
-
-    db.get("SELECT * FROM clients WHERE id = ?", [id], (getErr, existing) => {
-      if (getErr) {
+    db.get("SELECT * FROM clients WHERE id = ?", [id], (err, existing) => {
+      if (err) {
         clear();
-        console.error("❌ Load client failed:", getErr);
-        return res.status(500).json({ error: "Failed to load client" });
+        console.error(err);
+        return res.status(500).json({ error: "Load failed" });
       }
       if (!existing) {
         clear();
         return res.status(404).json({ error: "Client not found" });
       }
 
-      const mergedName = name !== undefined ? String(name).trim() : (existing.name || "");
-      const mergedPhone = phone !== undefined ? canonicalPhone(phone) : (existing.phone || "");
+      const body = req.body || {};
 
-      const mergedEmail = email !== undefined ? (email || null) : existing.email;
-      const mergedNotes = notes !== undefined ? (notes || null) : existing.notes;
-      const mergedLanguage = language !== undefined ? (language || "English") : (existing.language || "English");
-      const mergedOffice = office !== undefined ? (office || null) : existing.office;
-      const mergedCaseType = case_type !== undefined ? (case_type || null) : existing.case_type;
-      const mergedAppt = AppointmentScheduledDate !== undefined
-        ? (AppointmentScheduledDate || null)
-        : existing.appointment_datetime;
+      const merged = {
+        name: body.name !== undefined ? body.name.trim() : existing.name,
+        phone: body.phone !== undefined ? canonicalPhone(body.phone) : existing.phone,
+        email: body.email !== undefined ? body.email : existing.email,
+        notes: body.notes !== undefined ? body.notes : existing.notes,
+        language: body.language !== undefined ? body.language : existing.language,
+        office: body.office !== undefined ? body.office : existing.office,
+        case_type: body.case_type !== undefined ? body.case_type : existing.case_type,
+        case_subtype: body.case_subtype !== undefined ? body.case_subtype : existing.case_subtype,
+        appt_setter: body.appt_setter !== undefined ? body.appt_setter : existing.appt_setter,
+        intake_coordinator:
+          body.intake_coordinator !== undefined
+            ? body.intake_coordinator
+            : existing.intake_coordinator,
+        appt_date: body.appt_date !== undefined ? body.appt_date : existing.appt_date,
+        appt_time: body.appt_time !== undefined ? body.appt_time : existing.appt_time,
+      };
 
-      if (!mergedName) {
+      if (!merged.name || !merged.phone) {
         clear();
-        return res.status(400).json({ error: "Name is required" });
-      }
-      if (!mergedPhone || mergedPhone.length < 10) {
-        clear();
-        return res.status(400).json({ error: "Phone number is required (10 digits)" });
+        return res.status(400).json({ error: "Name and phone required" });
       }
 
       db.get(
         "SELECT id FROM clients WHERE phone = ? AND id != ?",
-        [mergedPhone, id],
-        (dupeErr, dupeRow) => {
-          if (dupeErr) {
+        [merged.phone, id],
+        (dErr, dup) => {
+          if (dErr) {
             clear();
-            console.error("❌ Duplicate check failed:", dupeErr);
+            console.error(dErr);
             return res.status(500).json({ error: "Duplicate check failed" });
           }
-
-          if (dupeRow) {
+          if (dup) {
             clear();
-            return res.status(409).json({ error: "That phone number already exists as a client." });
+            return res.status(409).json({ error: "Phone already exists" });
           }
 
           db.run(
             `
               UPDATE clients SET
-                name = ?,
-                phone = ?,
-                email = ?,
-                notes = ?,
-                language = ?,
-                office = ?,
-                case_type = ?,
-                appointment_datetime = ?
+                name = ?, phone = ?, email = ?, notes = ?, language = ?, office = ?,
+                case_type = ?, case_subtype = ?,
+                appt_setter = ?, intake_coordinator = ?,
+                appt_date = ?, appt_time = ?
               WHERE id = ?
             `,
             [
-              mergedName,
-              mergedPhone,
-              mergedEmail,
-              mergedNotes,
-              mergedLanguage,
-              mergedOffice,
-              mergedCaseType,
-              mergedAppt,
+              merged.name,
+              merged.phone,
+              merged.email,
+              merged.notes,
+              merged.language,
+              merged.office,
+              merged.case_type,
+              merged.case_subtype,
+              merged.appt_setter,
+              merged.intake_coordinator,
+              merged.appt_date,
+              merged.appt_time,
               id,
             ],
-            function (updErr) {
-              if (updErr) {
+            (uErr) => {
+              if (uErr) {
                 clear();
-                console.error("❌ Client update failed:", updErr);
-                return res.status(500).json({ error: "Failed to update client" });
+                console.error(uErr);
+                return res.status(500).json({ error: "Update failed" });
               }
 
-              db.get("SELECT * FROM clients WHERE id = ?", [id], (finalErr, updated) => {
+              db.get("SELECT * FROM clients WHERE id = ?", [id], (fErr, row) => {
                 clear();
-                if (finalErr) {
-                  console.error("❌ Fetch updated client failed:", finalErr);
-                  return res.status(500).json({ error: "Updated, but failed to fetch client" });
+                if (fErr) {
+                  console.error(fErr);
+                  return res.status(500).json({ error: "Fetch failed" });
                 }
-                return res.json(updated);
+                res.json(row);
               });
             }
           );
@@ -251,8 +244,8 @@ router.patch("/:id", (req, res) => {
     });
   } catch (e) {
     clear();
-    console.error("❌ PATCH /api/clients crashed:", e);
-    return res.status(500).json({ error: "Server error updating client" });
+    console.error(e);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
@@ -261,17 +254,15 @@ router.patch("/:id", (req, res) => {
  */
 router.put("/:id/status", (req, res) => {
   const clear = withTimeout(res, "PUT /api/clients/:id/status");
-
-  const id = req.params.id;
   const { status_id } = req.body || {};
 
-  db.run("UPDATE clients SET status_id = ? WHERE id = ?", [status_id || null, id], (err) => {
+  db.run("UPDATE clients SET status_id = ? WHERE id = ?", [status_id || null, req.params.id], (err) => {
     clear();
     if (err) {
-      console.error("❌ Status update failed:", err);
-      return res.status(500).json({ success: false, error: "Status update failed" });
+      console.error(err);
+      return res.status(500).json({ success: false });
     }
-    return res.json({ success: true });
+    res.json({ success: true });
   });
 });
 
@@ -281,18 +272,14 @@ router.put("/:id/status", (req, res) => {
 router.delete("/:id", (req, res) => {
   const clear = withTimeout(res, "DELETE /api/clients/:id");
 
-  const id = req.params.id;
-
-  db.run("DELETE FROM messages WHERE client_id = ?", [id], (err1) => {
-    if (err1) console.error("❌ Delete messages failed:", err1);
-
-    db.run("DELETE FROM clients WHERE id = ?", [id], (err2) => {
+  db.run("DELETE FROM messages WHERE client_id = ?", [req.params.id], () => {
+    db.run("DELETE FROM clients WHERE id = ?", [req.params.id], (err) => {
       clear();
-      if (err2) {
-        console.error("❌ Delete client failed:", err2);
+      if (err) {
+        console.error(err);
         return res.status(500).json({ error: "Delete failed" });
       }
-      return res.json({ success: true });
+      res.json({ success: true });
     });
   });
 });
