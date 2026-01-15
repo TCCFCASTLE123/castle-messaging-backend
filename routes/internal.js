@@ -17,21 +17,16 @@ function requireInternalKey(req, res, next) {
   next();
 }
 
-function phoneDigits10(raw) {
-  const digits = String(raw || "").replace(/\D/g, "");
-  if (digits.length === 11 && digits.startsWith("1")) return digits.slice(1);
-  if (digits.length === 10) return digits;
-  return digits;
+function digits10(raw) {
+  const d = String(raw || "").replace(/\D/g, "");
+  if (d.length === 11 && d.startsWith("1")) return d.slice(1);
+  if (d.length === 10) return d;
+  return d;
 }
 
 function dbGet(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row)));
-  });
-}
-function dbAll(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows)));
   });
 }
 function dbRun(sql, params = []) {
@@ -43,113 +38,73 @@ function dbRun(sql, params = []) {
   });
 }
 
-let MESSAGE_COLS_CACHE = null;
-async function getMessageColsSet() {
-  if (MESSAGE_COLS_CACHE) return MESSAGE_COLS_CACHE;
-  const cols = await dbAll("PRAGMA table_info(messages)");
-  const set = new Set((cols || []).map((c) => c.name));
-  MESSAGE_COLS_CACHE = set;
-  return set;
-}
+async function findClientIdByPhone(toRaw) {
+  const d = digits10(toRaw);
+  const plus1 = "+1" + d;
+  const one = "1" + d;
 
-async function findClientByPhone(toRaw) {
-  const digits = phoneDigits10(toRaw);
-  const plus1 = "+1" + digits;
-  const one = "1" + digits;
-
-  // Try common storage formats
-  return await dbGet(
-    `SELECT id, name, phone
+  const row = await dbGet(
+    `SELECT id, name
      FROM clients
      WHERE phone = ?
         OR phone = ?
         OR phone = ?
-        OR REPLACE(REPLACE(REPLACE(phone,'+',''),'(',''),')','') LIKE ?`,
-    [digits, plus1, one, "%" + digits]
+        OR phone LIKE ?`,
+    [d, plus1, one, "%" + d]
   );
+
+  return row ? { id: row.id, name: row.name } : { id: null, name: null };
 }
 
+// POST /api/internal/send-sms
+// Apps Script calls this with x-api-key
 router.post("/send-sms", requireInternalKey, async (req, res) => {
   try {
     const to = String(req.body.phone || "").trim();
     const text = String(req.body.text || "").trim();
-    const sender = String(req.body.sender || "system").trim();
+    const sender = String(req.body.sender || "system").trim(); // "system" for automations
+    const timestamp = new Date().toISOString();
 
     if (!to || !text) return res.status(400).json({ message: "phone and text required" });
     if (!process.env.TWILIO_PHONE_NUMBER) return res.status(500).json({ message: "TWILIO_PHONE_NUMBER not set" });
 
-    // 1) SEND TWILIO
+    // 1) Send Twilio
     const tw = await twilioClient.messages.create({
       to,
       from: process.env.TWILIO_PHONE_NUMBER,
       body: text,
     });
 
-    const timestamp = new Date().toISOString();
+    // 2) Find client_id by phone
+    const found = await findClientIdByPhone(to);
+    const clientId = found.id;
 
-    // 2) FIND CLIENT
-    const clientRow = await findClientByPhone(to);
-    const clientId = clientRow?.id || null;
-    const clientName = clientRow?.name || null;
-
-    // 3) SAVE TO DB — ONLY COLUMNS THAT EXIST
-    const cols = await getMessageColsSet();
-
-    const insertCols = [];
-    const params = [];
-
-    if (cols.has("client_id")) {
-      insertCols.push("client_id");
-      params.push(clientId);
-    }
-    if (cols.has("sender")) {
-      insertCols.push("sender");
-      params.push(sender);
-    }
-    if (cols.has("text")) {
-      insertCols.push("text");
-      params.push(text);
-    }
-    if (cols.has("direction")) {
-      insertCols.push("direction");
-      params.push("outbound");
-    }
-    if (cols.has("timestamp")) {
-      insertCols.push("timestamp");
-      params.push(timestamp);
-    }
-    if (cols.has("external_id")) {
-      insertCols.push("external_id");
-      params.push(tw.sid);
+    // If we can’t match a client, fail so the sheet shows FAILED (prevents ghost sends)
+    if (!clientId) {
+      return res.status(400).json({
+        message: "SMS sent but could not match client by phone for DB save",
+        to,
+        sid: tw.sid,
+      });
     }
 
-    // IMPORTANT: only include phone if the column actually exists
-    if (cols.has("phone")) {
-      insertCols.push("phone");
-      params.push(to);
-    }
+    // 3) Insert into messages (matches your schema exactly)
+    await dbRun(
+      `INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [clientId, sender, text, "outbound", timestamp, tw.sid]
+    );
 
-    if (insertCols.length === 0) {
-      return res.status(500).json({ message: "messages table has no recognized columns to insert into" });
-    }
-
-    const placeholders = insertCols.map(() => "?").join(", ");
-    const sql = `INSERT INTO messages (${insertCols.join(", ")}) VALUES (${placeholders})`;
-
-    // If this fails, we return 500 so Sheets shows FAILED (not SENT)
-    await dbRun(sql, params);
-
-    // 4) EMIT SOCKET EVENT
+    // 4) Emit to UI
     if (req.io) {
       req.io.emit("newMessage", {
         client_id: clientId,
-        client_name: clientName,
+        client_name: found.name,
         sender,
         text,
         direction: "outbound",
         timestamp,
         external_id: tw.sid,
-        phone: to,
       });
     }
 
