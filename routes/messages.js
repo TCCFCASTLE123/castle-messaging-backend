@@ -1,16 +1,9 @@
 // routes/messages.js
-
 const express = require("express");
 const router = express.Router();
 const twilio = require("twilio");
 const db = require("../db");
 const normalizePhone = require("../utils/normalizePhone");
-
-// OPTIONAL: If you already have auth middleware, import it here.
-// Example guesses (uncomment the one you actually have):
-// const requireAuth = require("../middleware/auth");
-// const requireAuth = require("../middleware/requireAuth");
-// const { requireAuth } = require("../middleware/auth");
 
 // Twilio client
 const twilioClient = twilio(
@@ -19,6 +12,12 @@ const twilioClient = twilio(
 );
 
 const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
+
+// Helper: client table stores 10-digit phone
+function canon10(input) {
+  if (!input) return "";
+  return String(input).replace(/\D/g, "").slice(-10);
+}
 
 /**
  * GET /api/messages
@@ -30,9 +29,9 @@ const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
 router.get("/", (req, res) => {
   const clientId = req.query.client_id ? String(req.query.client_id).trim() : "";
   const phoneRaw = req.query.phone ? String(req.query.phone).trim() : "";
-  const phone = phoneRaw ? normalizePhone(phoneRaw) : "";
+  const phone10 = phoneRaw ? canon10(phoneRaw) : "";
 
-  if (!clientId && !phone) {
+  if (!clientId && !phone10) {
     return res.status(400).json({ ok: false, error: "Provide client_id or phone" });
   }
 
@@ -50,7 +49,7 @@ router.get("/", (req, res) => {
           console.error("❌ messages fetch failed:", err.message);
           return res.status(500).json({ ok: false, error: err.message });
         }
-        res.json(rows || []);
+        return res.json(rows || []);
       }
     );
   };
@@ -58,26 +57,22 @@ router.get("/", (req, res) => {
   if (clientId) return runQueryByClientId(clientId);
 
   // If phone provided, translate to client_id first
-  db.get(
-    "SELECT id FROM clients WHERE phone = ?",
-    [phone.replace(/\D/g, "").slice(-10)],
-    (err, row) => {
-      if (err) {
-        console.error("❌ client lookup by phone failed:", err.message);
-        return res.status(500).json({ ok: false, error: err.message });
-      }
-      if (!row) return res.json([]);
-      runQueryByClientId(row.id);
+  db.get("SELECT id FROM clients WHERE phone = ?", [phone10], (err, row) => {
+    if (err) {
+      console.error("❌ client lookup by phone failed:", err.message);
+      return res.status(500).json({ ok: false, error: err.message });
     }
-  );
+    if (!row) return res.json([]);
+    runQueryByClientId(row.id);
+  });
 });
 
 /**
  * GET /api/messages/conversation/:client_id
- * Backward compatible
+ * Backward compatible (returns array)
  */
 router.get("/conversation/:client_id", (req, res) => {
-  const clientId = req.params.client_id;
+  const clientId = String(req.params.client_id || "").trim();
 
   db.all(
     `
@@ -92,7 +87,7 @@ router.get("/conversation/:client_id", (req, res) => {
         console.error("❌ DB error:", err.message);
         return res.status(500).json([]);
       }
-      res.json(rows || []);
+      return res.json(rows || []);
     }
   );
 });
@@ -101,138 +96,126 @@ router.get("/conversation/:client_id", (req, res) => {
  * POST /api/messages/send
  * Sends an SMS (Twilio) AND saves message in DB AND emits socket event
  * Body: { client_id?, phone?, text, sender? }
- *
- * NOTE: To record "who sent the last text", we store `user_id` on outbound messages.
- * This requires the DB column: messages.user_id (INTEGER)
- * and your auth middleware to attach req.user.id (recommended).
  */
-router.post(
-  "/send",
-  // If you have auth middleware, enable it here:
-  // requireAuth,
-  async (req, res) => {
-    try {
-      const text = (req.body.text || "").trim();
-      const sender =
-  (req.user?.username && String(req.user.username).trim()) ||
-  (req.body.sender && String(req.body.sender).trim()) ||
-  "agent";
+router.post("/send", async (req, res) => {
+  try {
+    const text = (req.body.text || "").trim();
 
+    // ✅ who sent it
+    const sender =
+      (req.user?.username && String(req.user.username).trim()) ||
+      (req.body.sender && String(req.body.sender).trim()) ||
+      "agent";
 
-      // If auth middleware is present, this will be set. If not, it will be null.
-      const userId = req.user?.id ?? null;
+    // ✅ who (user_id) if auth middleware exists
+    const userId = req.user?.id ?? null;
 
-      const clientIdRaw = req.body.client_id ? String(req.body.client_id).trim() : "";
-      const phoneRaw = req.body.phone ? String(req.body.phone).trim() : "";
+    const clientIdRaw = req.body.client_id ? String(req.body.client_id).trim() : "";
+    const phoneRaw = req.body.phone ? String(req.body.phone).trim() : "";
+    const phone10 = phoneRaw ? canon10(phoneRaw) : "";
 
-      if (!text) {
-        return res.status(400).json({ ok: false, error: "Missing text" });
-      }
-
-      // Resolve client
-      const clientRow = await new Promise((resolve, reject) => {
-        if (clientIdRaw) {
-          db.get("SELECT id, phone, name FROM clients WHERE id = ?", [clientIdRaw], (err, row) => {
-            if (err) return reject(err);
-            resolve(row || null);
-          });
-        } else {
-          const canon10 = phoneRaw ? String(phoneRaw).replace(/\D/g, "").slice(-10) : "";
-          if (!canon10) return resolve(null);
-
-          db.get("SELECT id, phone, name FROM clients WHERE phone = ?", [canon10], (err, row) => {
-            if (err) return reject(err);
-            resolve(row || null);
-          });
-        }
-      });
-
-      if (!clientRow) {
-        return res.status(404).json({ ok: false, error: "Client not found" });
-      }
-
-      const client_id = clientRow.id;
-
-      // Twilio needs E.164; clientRow.phone is canonical 10 digits
-      const to = normalizePhone(clientRow.phone);
-
-      if (!to) {
-        return res.status(400).json({
-          ok: false,
-          error: "Client phone is invalid. Must be a real 10-digit US number.",
-        });
-      }
-
-      if (!twilioFrom) {
-        return res.status(500).json({
-          ok: false,
-          error: "TWILIO_PHONE_NUMBER is not set on the server.",
-        });
-      }
-
-      // Send via Twilio
-      const sent = await twilioClient.messages.create({
-        from: twilioFrom,
-        to,
-        body: text,
-      });
-
-      // Save to DB
-    // Save to DB
-// Save to DB
-const ts = new Date().toISOString();
-
-const messageId = await new Promise((resolve, reject) => {
-  db.run(
-    `INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id, user_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [client_id, sender, text, "outbound", ts, sent.sid, userId],
-    function (err) {
-      if (err) return reject(err);
-      resolve(this.lastID);
+    if (!text) {
+      return res.status(400).json({ ok: false, error: "Missing text" });
     }
-  );
-});
 
-
-      // ✅ Persist “phone-like ordering” (so refresh keeps correct order)
-      db.run(
-        `UPDATE clients SET last_message_at = ?, last_message_text = ? WHERE id = ?`,
-        [ts, text, client_id],
-        (e) => {
-          if (e) console.error("❌ Update last_message_at failed:", e.message);
-        }
-      );
-
-      // Emit live update
-      const payload = {
-        id: messageId,
-        client_id,
-        client_name: clientRow.name || undefined,
-        phone: to,
-        sender,
-        text,
-        direction: "outbound",
-        timestamp: ts,
-        external_id: sent.sid,
-        user_id: userId,
-      };
-
-      if (req.io) {
-        req.io.emit("newMessage", payload);
-        req.io.emit("message", payload);
+    // Resolve client
+    const clientRow = await new Promise((resolve, reject) => {
+      if (clientIdRaw) {
+        db.get("SELECT id, phone, name FROM clients WHERE id = ?", [clientIdRaw], (err, row) => {
+          if (err) return reject(err);
+          resolve(row || null);
+        });
+      } else {
+        if (!phone10) return resolve(null);
+        db.get("SELECT id, phone, name FROM clients WHERE phone = ?", [phone10], (err, row) => {
+          if (err) return reject(err);
+          resolve(row || null);
+        });
       }
+    });
 
-      return res.json({ ok: true, id: messageId, client_id, sid: sent.sid });
-    } catch (err) {
-      console.error("❌ POST /api/messages/send failed:", err);
+    if (!clientRow) {
+      return res.status(404).json({ ok: false, error: "Client not found" });
+    }
+
+    const client_id = clientRow.id;
+
+    // Twilio needs E.164; clientRow.phone is canonical 10 digits in DB
+    const to = normalizePhone(clientRow.phone);
+
+    if (!to) {
+      return res.status(400).json({
+        ok: false,
+        error: "Client phone is invalid. Must be a real 10-digit US number.",
+      });
+    }
+
+    if (!twilioFrom) {
       return res.status(500).json({
         ok: false,
-        error: err?.message || String(err),
+        error: "TWILIO_PHONE_NUMBER is not set on the server.",
       });
     }
+
+    // Send via Twilio
+    const sent = await twilioClient.messages.create({
+      from: twilioFrom,
+      to,
+      body: text,
+    });
+
+    // Save to DB
+    const ts = new Date().toISOString();
+
+    const messageId = await new Promise((resolve, reject) => {
+      db.run(
+        `INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id, user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [client_id, sender, text, "outbound", ts, sent.sid, userId],
+        function (err) {
+          if (err) return reject(err);
+          resolve(this.lastID);
+        }
+      );
+    });
+
+    // ✅ Persist ordering
+    db.run(
+      `UPDATE clients SET last_message_at = ?, last_message_text = ? WHERE id = ?`,
+      [ts, text, client_id],
+      (e) => {
+        if (e) console.error("❌ Update last_message_at failed:", e.message);
+      }
+    );
+
+    // Emit live update
+    const payload = {
+      id: messageId,
+      client_id,
+      client_name: clientRow.name || undefined,
+      phone: to,
+      sender,
+      text,
+      direction: "outbound",
+      timestamp: ts,
+      external_id: sent.sid,
+      user_id: userId,
+    };
+
+    if (req.io) {
+      req.io.emit("newMessage", payload);
+      req.io.emit("message", payload);
+    }
+
+    return res.json({ ok: true, id: messageId, client_id, sid: sent.sid });
+  } catch (err) {
+    console.error("❌ POST /api/messages/send failed:", err);
+    return res.status(500).json({
+      ok: false,
+      error: err?.message || String(err),
+    });
   }
-);
+});
 
 /**
  * POST /api/messages/note
@@ -241,18 +224,24 @@ const messageId = await new Promise((resolve, reject) => {
  */
 router.post("/note", (req, res) => {
   const phoneRaw = req.body.phone || "";
-  const canon10 = String(phoneRaw).replace(/\D/g, "").slice(-10);
+  const phone10 = canon10(phoneRaw);
+
   const text = (req.body.text || "").trim();
-  const sender = (req.body.sender || "agent").trim();
+
+  // ✅ who wrote the note
+  const sender =
+    (req.user?.username && String(req.user.username).trim()) ||
+    (req.body.sender && String(req.body.sender).trim()) ||
+    "agent";
 
   // If auth middleware exists globally, this may be populated; otherwise null.
   const userId = req.user?.id ?? null;
 
-  if (!canon10 || !text) {
+  if (!phone10 || !text) {
     return res.status(400).json({ ok: false, error: "Missing phone or text" });
   }
 
-  db.get("SELECT id, name FROM clients WHERE phone = ?", [canon10], (err, row) => {
+  db.get("SELECT id, name FROM clients WHERE phone = ?", [phone10], (err, row) => {
     if (err) {
       console.error("❌ client lookup failed:", err.message);
       return res.status(500).json({ ok: false, error: err.message });
@@ -264,14 +253,15 @@ router.post("/note", (req, res) => {
     db.run(
       `INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id, user_id)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [row.id, sender, text, "outbound", ts, null, userId],
+      // ✅ direction = "note" so it doesn't act like an outbound SMS
+      [row.id, sender, text, "note", ts, null, userId],
       function (msgErr) {
         if (msgErr) {
           console.error("❌ note insert failed:", msgErr.message);
           return res.status(500).json({ ok: false, error: msgErr.message });
         }
 
-        // ✅ Persist ordering for notes too
+        // ✅ Persist ordering for notes too (keeps client pinned to top if you want that)
         db.run(
           `UPDATE clients SET last_message_at = ?, last_message_text = ? WHERE id = ?`,
           [ts, text, row.id],
@@ -284,10 +274,10 @@ router.post("/note", (req, res) => {
           id: this.lastID,
           client_id: row.id,
           client_name: row.name || undefined,
-          phone: `+1${canon10}`,
+          phone: `+1${phone10}`,
           sender,
           text,
-          direction: "outbound",
+          direction: "note",
           timestamp: ts,
           external_id: null,
           user_id: userId,
@@ -298,11 +288,10 @@ router.post("/note", (req, res) => {
           req.io.emit("message", payload);
         }
 
-        res.json({ ok: true, id: this.lastID, client_id: row.id });
+        return res.json({ ok: true, id: this.lastID, client_id: row.id });
       }
     );
   });
 });
 
 module.exports = router;
-
