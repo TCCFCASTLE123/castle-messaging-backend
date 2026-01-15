@@ -16,7 +16,7 @@ function canonicalPhone(input) {
   if (!input) return "";
   const digits = String(input).replace(/\D/g, "");
   if (digits.length === 11 && digits.startsWith("1")) return digits.slice(1);
-  return digits;
+  return digits; // ✅ keep 10-digit phones
 }
 
 const ALLOWED_CODES = new Set([
@@ -62,6 +62,19 @@ function getStatusIdByName(statusText) {
   });
 }
 
+// normalize case type from CR/IMM/BK? column into your UI dropdown values
+function normalizeMainCaseType(caseGroupRaw) {
+  const v = String(caseGroupRaw || "").trim().toUpperCase();
+  if (!v) return null;
+
+  // handles "CR", "CRIMINAL", "CI - Criminal", etc
+  if (v.includes("CR")) return "Criminal";
+  if (v.includes("IMM")) return "Immigration";
+  if (v.includes("BK") || v.includes("BANK")) return "Bankruptcy";
+
+  return null;
+}
+
 router.post("/update", requireKey, async (req, res) => {
   try {
     const payload = req.body || {};
@@ -72,21 +85,33 @@ router.post("/update", requireKey, async (req, res) => {
     const emailRaw = String(pick(row, "email", "EMAIL")).trim();
     const office = String(pick(row, "office", "OFFICE")).trim();
 
-    const statusText = String(pick(row, "status", "STATUS")).trim(); // from sheet
-    const status_id = await getStatusIdByName(statusText); // convert to id
+    const statusText = String(pick(row, "status", "STATUS")).trim();
+    const status_id = await getStatusIdByName(statusText);
 
-    const caseGroup = String(pick(row, "case_group", "CR/IMM/BK?")).trim();
-    const subCaseType = String(pick(row, "case_type", "CASE TYPE")).trim(); // “Sub Case Type” in UI
-    const language = String(pick(row, "language", "SP/ENG?", "ENG/SP?")).trim();
+    // Language headers vary across tabs
+    const language = String(pick(row, "language", "SP/ENG?", "ENG/SP?", "SPENG?", "ENGSP?")).trim();
 
-    const apptSetter = cleanCode(pick(row, "appt_setter", "APPT. SETTER"));
-    const ic = cleanCode(pick(row, "ic", "I.C."));
+    // Main case type comes from CR/IMM/BK? (dropdown in your React form)
+    const caseGroup = String(pick(row, "case_group", "CR/IMM/BK?", "CR/IMM/BK")).trim();
+    const mainCaseType = normalizeMainCaseType(caseGroup);
 
-    const apptDate = String(pick(row, "appt_date", "APPT. DATE")).trim();
-    const apptTime = String(pick(row, "appt_time", "APPT. TIME")).trim();
+    // Sub-case type is the detailed "CASE TYPE" text (your React "Sub Case Type" field)
+    const case_subtype = String(pick(row, "case_subtype", "case_type", "CASE TYPE")).trim();
+
+    // Appt Setter + I.C. headers vary (with/without dots)
+    const appt_setter = cleanCode(pick(row, "appt_setter", "APPT SETTER", "APPT. SETTER"));
+    const intake_coordinator = cleanCode(
+      pick(row, "intake_coordinator", "ic", "I.C.", "I.C", "IC")
+    );
+
+    // Appt Date/Time headers vary (with/without dots)
+    const appt_date = String(pick(row, "appt_date", "APPT DATE", "APPT. DATE")).trim();
+    const appt_time = String(pick(row, "appt_time", "APPT TIME", "APPT. TIME")).trim();
+
+    // keep old combined field too
     const appointment_datetime =
-      buildAppointmentDatetime(apptDate, apptTime) ||
-      String(pick(row, "appointment_at")).trim() ||
+      buildAppointmentDatetime(appt_date, appt_time) ||
+      String(pick(row, "appointment_at", "appointment_datetime")).trim() ||
       null;
 
     const notes = String(pick(row, "notes", "NOTES")).trim();
@@ -99,29 +124,46 @@ router.post("/update", requireKey, async (req, res) => {
     const finalOffice = office || null;
     const finalLanguage = language || null;
 
-    const finalCaseType = (subCaseType || caseGroup || "").trim() || null;
+    // Keep backward compat: case_type column used in your clients list/details
+    // We store the MAIN dropdown value there.
+    const case_type = mainCaseType || null;
 
-    // NOTE: this assumes you have added these optional columns:
-    // status_text, case_group, appt_setter, ic
-    // If you didn't add them, remove them from SQL.
+    // NOTE:
+    // This SQL requires the optional columns to exist in clients table:
+    // status_text, case_group, appt_setter, ic, appt_date, appt_time, case_subtype, intake_coordinator
     const sql = `
       INSERT INTO clients
-        (name, phone, email, notes, language, office, case_type, appointment_datetime,
-         status_id, status_text, case_group, appt_setter, ic)
+        (name, phone, email, notes, language, office,
+         case_type, case_subtype,
+         appt_date, appt_time, appointment_datetime,
+         status_id, status_text, case_group,
+         appt_setter, intake_coordinator, ic)
       VALUES
-        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (?, ?, ?, ?, ?, ?,
+         ?, ?,
+         ?, ?, ?,
+         ?, ?, ?,
+         ?, ?, ?)
       ON CONFLICT(phone) DO UPDATE SET
         name = excluded.name,
         email = excluded.email,
         notes = excluded.notes,
         language = excluded.language,
         office = excluded.office,
+
         case_type = excluded.case_type,
+        case_subtype = excluded.case_subtype,
+
+        appt_date = excluded.appt_date,
+        appt_time = excluded.appt_time,
         appointment_datetime = excluded.appointment_datetime,
+
         status_id = excluded.status_id,
         status_text = excluded.status_text,
         case_group = excluded.case_group,
+
         appt_setter = excluded.appt_setter,
+        intake_coordinator = excluded.intake_coordinator,
         ic = excluded.ic
     `;
 
@@ -134,13 +176,22 @@ router.post("/update", requireKey, async (req, res) => {
         notes || null,
         finalLanguage,
         finalOffice,
-        finalCaseType,
+
+        case_type,
+        case_subtype || null,
+
+        appt_date || null,
+        appt_time || null,
         appointment_datetime,
-        status_id,                 // ✅ what React dropdown needs
-        statusText || null,        // optional display/debug
+
+        status_id,
+        statusText || null,
         caseGroup || null,
-        apptSetter,
-        ic,
+
+        appt_setter,
+        intake_coordinator,
+        // keep legacy column "ic" in sync too
+        intake_coordinator,
       ],
       function (err) {
         if (err) {
@@ -155,18 +206,38 @@ router.post("/update", requireKey, async (req, res) => {
             email,
             office: finalOffice,
             language: finalLanguage,
-            case_type: finalCaseType,
+
+            case_type,
+            case_subtype,
+
+            appt_date: appt_date || null,
+            appt_time: appt_time || null,
             appointment_datetime,
+
             status_id,
             status_text: statusText || null,
             case_group: caseGroup || null,
-            appt_setter: apptSetter,
-            ic,
+
+            appt_setter,
+            intake_coordinator,
+            ic: intake_coordinator,
+
             notes: notes || null,
           });
         }
 
-        return res.json({ ok: true, status_id, status_text: statusText || null });
+        return res.json({
+          ok: true,
+          status_id,
+          updated: {
+            case_type,
+            case_subtype,
+            appt_date,
+            appt_time,
+            appt_setter,
+            intake_coordinator,
+          },
+        });
       }
     );
   } catch (e) {
