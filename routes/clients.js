@@ -84,9 +84,10 @@ router.post("/", (req, res) => {
       clear();
       return res.status(400).json({ error: "Name is required" });
     }
-    if (!cleanPhone || cleanPhone.length < 10) {
-      clear();
-      return res.status(400).json({ error: "Phone number is required (10 digits)" });
+   if (!cleanPhone || cleanPhone.length !== 10) {
+  clear();
+  return res.status(400).json({ error: "Phone number is required (10 digits)" });
+}
     }
 
     db.get("SELECT id FROM clients WHERE phone = ?", [cleanPhone], (err, row) => {
@@ -198,10 +199,16 @@ router.patch("/:id", (req, res) => {
         appt_time: cleanPatchValue(body.appt_time) !== undefined ? body.appt_time : existing.appt_time,
       };
 
-      if (!merged.name || !merged.phone) {
-        clear();
-        return res.status(400).json({ error: "Name and phone required" });
-      }
+if (!merged.name || !merged.phone) {
+  clear();
+  return res.status(400).json({ error: "Name and phone required" });
+}
+
+if (String(merged.phone).length !== 10) {
+  clear();
+  return res.status(400).json({ error: "Phone must be 10 digits" });
+}
+
 
       db.get(
         "SELECT id FROM clients WHERE phone = ? AND id != ?",
@@ -304,3 +311,4 @@ router.delete("/:id", (req, res) => {
 });
 
 module.exports = router;
+
