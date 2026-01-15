@@ -174,19 +174,22 @@ router.post(
       });
 
       // Save to DB
-      const ts = new Date().toISOString();
+    // Save to DB
+const ts = new Date().toISOString();
+const userId = req.user?.id ?? null;
 
-      const messageId = await new Promise((resolve, reject) => {
-        db.run(
-          `INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id, user_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [client_id, sender, text, "outbound", ts, sent.sid, userId],
-          function (err) {
-            if (err) return reject(err);
-            resolve(this.lastID);
-          }
-        );
-      });
+const messageId = await new Promise((resolve, reject) => {
+  db.run(
+    `INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [client_id, sender, text, "outbound", ts, sent.sid, userId],
+    function (err) {
+      if (err) return reject(err);
+      resolve(this.lastID);
+    }
+  );
+});
+
 
       // ✅ Persist “phone-like ordering” (so refresh keeps correct order)
       db.run(
@@ -298,3 +301,4 @@ router.post("/note", (req, res) => {
 });
 
 module.exports = router;
+
