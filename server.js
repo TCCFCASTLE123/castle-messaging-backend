@@ -28,6 +28,33 @@ const db = require("./db");
 const app = express();
 const server = http.createServer(app);
 
+const jwt = require("jsonwebtoken");
+
+function requireAuth(req, res, next) {
+  try {
+    const h = req.headers.authorization || "";
+    if (!h.startsWith("Bearer ")) {
+      return res.status(401).json({ ok: false, error: "Missing token" });
+    }
+    const token = h.slice("Bearer ".length).trim();
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Support either { id } or { userId } depending on how you signed the JWT
+    req.user = {
+      id: decoded.id ?? decoded.userId ?? decoded.user_id ?? null,
+      username: decoded.username,
+      role: decoded.role,
+    };
+
+    if (!req.user.id) {
+      return res.status(401).json({ ok: false, error: "Invalid token payload" });
+    }
+
+    next();
+  } catch (e) {
+    return res.status(401).json({ ok: false, error: "Invalid token" });
+  }
+}
 
 
 // -------------------- LOGGING --------------------
@@ -110,7 +137,7 @@ twilio(
 
 // -------------------- API ROUTES --------------------
 app.use("/api/auth", authRoutes);
-app.use("/api/messages", messageRoutes);
+app.use("/api/messages", requireAuth, messageRoutes);
 app.use("/api/clients", clientRoutes);
 app.use("/api/statuses", statusRoutes);
 app.use("/api/templates", templateRoutes);
@@ -133,5 +160,6 @@ const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
