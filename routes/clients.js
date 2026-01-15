@@ -1,4 +1,4 @@
-// routes/clients.js — HARDENED + PATCH DOES NOT WIPE SYNCED FIELDS
+// routes/clients.js — CLEAN + SAFE PATCH (does not wipe with blank strings)
 
 const express = require("express");
 const router = express.Router();
@@ -11,7 +11,7 @@ function canonicalPhone(input) {
   return digits;
 }
 
-// Treat "" as "not provided" for PATCH so we don't wipe existing synced fields.
+// Treat "" as "not provided" for PATCH so we don't wipe existing values.
 function cleanPatchValue(v) {
   if (v === undefined) return undefined; // not provided
   if (v === "") return undefined;        // ignore blank strings
@@ -72,6 +72,7 @@ router.post("/", (req, res) => {
       case_type,
       case_subtype,
       appt_setter,
+      ic,
       intake_coordinator,
       appt_date,
       appt_time,
@@ -84,10 +85,9 @@ router.post("/", (req, res) => {
       clear();
       return res.status(400).json({ error: "Name is required" });
     }
-   if (!cleanPhone || cleanPhone.length !== 10) {
-  clear();
-  return res.status(400).json({ error: "Phone number is required (10 digits)" });
-}
+    if (!cleanPhone || cleanPhone.length !== 10) {
+      clear();
+      return res.status(400).json({ error: "Phone number is required (10 digits)" });
     }
 
     db.get("SELECT id FROM clients WHERE phone = ?", [cleanPhone], (err, row) => {
@@ -107,10 +107,10 @@ router.post("/", (req, res) => {
           (
             name, phone, email, notes, language, office,
             case_type, case_subtype,
-            appt_setter, intake_coordinator,
+            appt_setter, ic, intake_coordinator,
             appt_date, appt_time
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           cleanName,
@@ -122,6 +122,7 @@ router.post("/", (req, res) => {
           case_type || null,
           case_subtype || null,
           appt_setter || null,
+          ic || null,
           intake_coordinator || null,
           appt_date || null,
           appt_time || null,
@@ -153,7 +154,7 @@ router.post("/", (req, res) => {
 
 /**
  * PATCH /api/clients/:id
- * ✅ IMPORTANT: does NOT overwrite existing values with "" (blank strings)
+ * ✅ does NOT overwrite existing values with "" (blank strings)
  */
 router.patch("/:id", (req, res) => {
   const clear = withTimeout(res, "PATCH /api/clients/:id");
@@ -173,7 +174,6 @@ router.patch("/:id", (req, res) => {
 
       const body = req.body || {};
 
-      // Only apply values if they are actually provided and not ""
       const nameVal = cleanPatchValue(body.name);
       const phoneVal = cleanPatchValue(body.phone);
 
@@ -190,6 +190,7 @@ router.patch("/:id", (req, res) => {
         case_subtype: cleanPatchValue(body.case_subtype) !== undefined ? body.case_subtype : existing.case_subtype,
 
         appt_setter: cleanPatchValue(body.appt_setter) !== undefined ? body.appt_setter : existing.appt_setter,
+        ic: cleanPatchValue(body.ic) !== undefined ? body.ic : existing.ic,
         intake_coordinator:
           cleanPatchValue(body.intake_coordinator) !== undefined
             ? body.intake_coordinator
@@ -199,16 +200,14 @@ router.patch("/:id", (req, res) => {
         appt_time: cleanPatchValue(body.appt_time) !== undefined ? body.appt_time : existing.appt_time,
       };
 
-if (!merged.name || !merged.phone) {
-  clear();
-  return res.status(400).json({ error: "Name and phone required" });
-}
-
-if (String(merged.phone).length !== 10) {
-  clear();
-  return res.status(400).json({ error: "Phone must be 10 digits" });
-}
-
+      if (!merged.name || !merged.phone) {
+        clear();
+        return res.status(400).json({ error: "Name and phone required" });
+      }
+      if (merged.phone.length !== 10) {
+        clear();
+        return res.status(400).json({ error: "Phone must be 10 digits" });
+      }
 
       db.get(
         "SELECT id FROM clients WHERE phone = ? AND id != ?",
@@ -229,7 +228,7 @@ if (String(merged.phone).length !== 10) {
               UPDATE clients SET
                 name = ?, phone = ?, email = ?, notes = ?, language = ?, office = ?,
                 case_type = ?, case_subtype = ?,
-                appt_setter = ?, intake_coordinator = ?,
+                appt_setter = ?, ic = ?, intake_coordinator = ?,
                 appt_date = ?, appt_time = ?
               WHERE id = ?
             `,
@@ -243,6 +242,7 @@ if (String(merged.phone).length !== 10) {
               merged.case_type,
               merged.case_subtype,
               merged.appt_setter,
+              merged.ic,
               merged.intake_coordinator,
               merged.appt_date,
               merged.appt_time,
@@ -282,14 +282,18 @@ router.put("/:id/status", (req, res) => {
   const clear = withTimeout(res, "PUT /api/clients/:id/status");
   const { status_id } = req.body || {};
 
-  db.run("UPDATE clients SET status_id = ? WHERE id = ?", [status_id || null, req.params.id], (err) => {
-    clear();
-    if (err) {
-      console.error(err);
-      return res.status(500).json({ success: false });
+  db.run(
+    "UPDATE clients SET status_id = ? WHERE id = ?",
+    [status_id || null, req.params.id],
+    (err) => {
+      clear();
+      if (err) {
+        console.error(err);
+        return res.status(500).json({ success: false });
+      }
+      return res.json({ success: true });
     }
-    return res.json({ success: true });
-  });
+  );
 });
 
 /**
@@ -311,4 +315,3 @@ router.delete("/:id", (req, res) => {
 });
 
 module.exports = router;
-
