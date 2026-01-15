@@ -12,7 +12,7 @@ const { Server } = require("socket.io");
 const twilio = require("twilio");
 
 // Routes
-const authRoutes = require("./routes/auth");
+const { router: authRoutes, requireAuth } = require("./routes/auth");
 const messageRoutes = require("./routes/messages");
 const clientRoutes = require("./routes/clients");
 const statusRoutes = require("./routes/statuses");
@@ -160,6 +160,7 @@ const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
