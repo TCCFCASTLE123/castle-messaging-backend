@@ -5,6 +5,150 @@ const db = require("../db");
 
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
+// ----------------------------
+// Staff routing map + helpers
+// ----------------------------
+const STAFF = {
+  agp: { name: "Ana Puig", phone: "2392183986" },
+  cc: { name: "Chris Castle", phone: "8588294287" },
+  clc: { name: "Cassandra Castle", phone: "6027960878" },
+  dt: { name: "Dean Turnbow", phone: "6026976730" },
+  gbc: { name: "Gabriel Cano", phone: "4807404184" },
+  ild: { name: "Itzayani Luque", phone: "6233135868" },
+  jmp: { name: "Janny Mancinas", phone: "4803528900" },
+  jh: { name: "Josh Hall", phone: "6024603599" },
+  jwg: { name: "Jacob Gray", phone: "4808260509" },
+  oxs: { name: "Omar Solano", phone: "8478079644" },
+  oac: { name: "Oscar Castellanos", phone: "5626744968" },
+  nva: { name: "Nadean Accra", phone: "4807097993" },
+  trd: { name: "Tyler Durham", phone: "6027403867" },
+  rp: { name: "Rebeca Perez", phone: "6196323950" },
+};
+
+// Aliases → staff code (helps match sheet values like "Gabe", "Gabriel Cano", etc.)
+const STAFF_ALIASES = {
+  "agp": "agp",
+  "ana": "agp",
+  "ana puig": "agp",
+
+  "cc": "cc",
+  "chris": "cc",
+  "chris castle": "cc",
+
+  "clc": "clc",
+  "cass": "clc",
+  "cassandra": "clc",
+  "cassandra castle": "clc",
+
+  "dt": "dt",
+  "dean": "dt",
+  "dean turnbow": "dt",
+
+  "gbc": "gbc",
+  "gabe": "gbc",
+  "gabriel": "gbc",
+  "gabriel cano": "gbc",
+
+  "ild": "ild",
+  "itzayani": "ild",
+  "itzayani luque": "ild",
+
+  "jmp": "jmp",
+  "janny": "jmp",
+  "janny mancinas": "jmp",
+
+  "jh": "jh",
+  "josh": "jh",
+  "josh hall": "jh",
+
+  "jwg": "jwg",
+  "jacob": "jwg",
+  "jacob gray": "jwg",
+
+  "oxs": "oxs",
+  "omar": "oxs",
+  "omar solano": "oxs",
+
+  "oac": "oac",
+  "oscar": "oac",
+  "oscar castellanos": "oac",
+
+  "nva": "nva",
+  "nadean": "nva",
+  "nadean accra": "nva",
+
+  "trd": "trd",
+  "tyler": "trd",
+  "tyler durham": "trd",
+
+  "rp": "rp",
+  "rebeca": "rp",
+  "rebeca perez": "rp",
+};
+
+function normalizeName(s) {
+  return (s || "")
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/\./g, "")
+    .replace(/\s+/g, " ");
+}
+
+function toE164US(digitsOrFormatted) {
+  const d = (digitsOrFormatted || "").replace(/\D/g, "");
+  if (d.length === 10) return "+1" + d;
+  if (d.length === 11 && d.startsWith("1")) return "+" + d;
+  return "";
+}
+
+// Prefer appt_setter → ic → intake_coordinator
+function pickStaffE164FromClient(client) {
+  const candidates = [client?.appt_setter, client?.ic, client?.intake_coordinator]
+    .map(normalizeName)
+    .filter(Boolean);
+
+  for (const raw of candidates) {
+    // If the sheet stores a code like "GBC"
+    const compact = raw.replace(/\s/g, "");
+    const directCode = STAFF_ALIASES[compact] || compact;
+    if (STAFF[directCode]) return toE164US(STAFF[directCode].phone);
+
+    // Try full string alias
+    const codeFull = STAFF_ALIASES[raw];
+    if (codeFull && STAFF[codeFull]) return toE164US(STAFF[codeFull].phone);
+
+    // Try first token (e.g., "Gabe S" -> "gabe")
+    const first = raw.split(" ")[0];
+    const codeFirst = STAFF_ALIASES[first];
+    if (codeFirst && STAFF[codeFirst]) return toE164US(STAFF[codeFirst].phone);
+  }
+
+  return "";
+}
+
+// Cooldown per client (avoid spamming staff if client sends many texts quickly)
+const ALERT_COOLDOWN_MS = Number(process.env.INBOUND_ALERT_COOLDOWN_MS || 60_000);
+const lastAlertByClientId = new Map(); // client_id -> timestamp ms
+
+function canSendAlertNow(client_id) {
+  const now = Date.now();
+  const last = lastAlertByClientId.get(client_id) || 0;
+  if (now - last < ALERT_COOLDOWN_MS) return false;
+  lastAlertByClientId.set(client_id, now);
+  return true;
+}
+
+const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID;
+const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;
+
+// If creds exist, we can send staff alert texts from backend
+const twilioClient =
+  twilioAccountSid && twilioAuthToken ? twilio(twilioAccountSid, twilioAuthToken) : null;
+
+// ----------------------------
+// Existing helpers
+// ----------------------------
 function canonicalPhone(input) {
   if (!input) return "";
   const digits = String(input).replace(/\D/g, "");
@@ -42,7 +186,7 @@ router.post("/inbound", async (req, res) => {
 
     const clientRow = await new Promise((resolve, reject) => {
       db.get(
-        "SELECT id, phone, name FROM clients WHERE phone = ?",
+        "SELECT id, phone, name, appt_setter, ic, intake_coordinator FROM clients WHERE phone = ?",
         [fromCanon],
         (err, row) => (err ? reject(err) : resolve(row || null))
       );
@@ -106,6 +250,62 @@ router.post("/inbound", async (req, res) => {
     if (req.io) {
       req.io.emit("newMessage", payload);
       req.io.emit("message", payload);
+    }
+
+    // -------------------------------------------------
+    // NEW: Staff alert SMS (appt_setter → ic → intake_coordinator)
+    // -------------------------------------------------
+    try {
+      // Only alert if we can and cooldown allows
+      if (twilioClient && canSendAlertNow(client_id)) {
+        // We might need fresher client routing fields if it was a placeholder client
+        let routingClient = clientRow;
+        if (!routingClient) {
+          routingClient = await new Promise((resolve, reject) => {
+            db.get(
+              "SELECT id, name, phone, appt_setter, ic, intake_coordinator FROM clients WHERE id = ?",
+              [client_id],
+              (err, row) => (err ? reject(err) : resolve(row || null))
+            );
+          });
+        }
+
+        const staffTo = pickStaffE164FromClient(routingClient || {});
+        const baseUrl = process.env.FRONTEND_URL || "";
+        const link = baseUrl ? `${baseUrl}/inbox?clientId=${client_id}` : "";
+        const preview = body.slice(0, 160);
+
+        // Send only if we found a staff recipient
+        if (staffTo) {
+          const fromInternal =
+            process.env.TWILIO_INTERNAL_FROM || process.env.TWILIO_PHONE_NUMBER || "";
+          if (fromInternal) {
+            const alertText =
+              `${(client_name || routingClient?.name || fromCanon)} sent you a text: "${preview}"` +
+              (link ? `\nOpen: ${link}` : "");
+
+            await twilioClient.messages.create({
+              to: staffTo,
+              from: fromInternal,
+              body: alertText,
+            });
+
+            console.log("🔔 Staff alert sent:", { client_id, to: staffTo });
+          } else {
+            console.warn("⚠️ No TWILIO_INTERNAL_FROM or TWILIO_PHONE_NUMBER set; cannot send staff alert.");
+          }
+        } else {
+          // no match found—quietly do nothing
+          console.log("ℹ️ No staff match for alert (appt_setter/ic/intake_coordinator).", {
+            client_id,
+            appt_setter: routingClient?.appt_setter,
+            ic: routingClient?.ic,
+            intake_coordinator: routingClient?.intake_coordinator,
+          });
+        }
+      }
+    } catch (notifyErr) {
+      console.error("⚠️ Staff alert SMS failed (non-fatal):", notifyErr);
     }
 
     const twiml = new MessagingResponse();
