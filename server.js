@@ -9,7 +9,6 @@ const express = require("express");
 const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
-const twilio = require("twilio");
 
 // Routes
 const { router: authRoutes, requireAuth } = require("./routes/auth");
@@ -17,9 +16,10 @@ const messageRoutes = require("./routes/messages");
 const clientRoutes = require("./routes/clients");
 const statusRoutes = require("./routes/statuses");
 const templateRoutes = require("./routes/templates");
-const scheduledMessagesRoutes = require("./routes/scheduledMEssages");
+const scheduledMessagesRoutes = require("./routes/scheduledMEssages"); // <-- confirm filename casing!
 const twilioRoutes = require("./routes/twilio");
 const sheetsWebhookRoutes = require("./routes/sheetsWebhook");
+const internalRoutes = require("./routes/internal"); // ✅ NEW
 
 // DB
 const db = require("./db");
@@ -100,24 +100,22 @@ function ensureClientColumns() {
 }
 ensureClientColumns();
 
-// -------------------- TWILIO SETUP --------------------
-twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-
-// -------------------- API ROUTES --------------------
 // -------------------- API ROUTES --------------------
 app.use("/api/auth", authRoutes);
 
-// 🔐 PROTECTED ROUTES
+// 🔐 PROTECTED (React users)
 app.use("/api/messages", requireAuth, messageRoutes);
 app.use("/api/clients", requireAuth, clientRoutes);
 app.use("/api/statuses", requireAuth, statusRoutes);
 app.use("/api/templates", requireAuth, templateRoutes);
-app.use("/api/scheduled_messages", requireAuth, scheduledMessagesRoutes);
+app.use("/api/scheduled_messages", requireAuth, scheduledMEssagesRoutes);
 
-// 🌐 PUBLIC ROUTES
+// 🌐 PUBLIC WEBHOOKS (Twilio + Sheets)
 app.use("/api/twilio", twilioRoutes);
 app.use("/api/sheets", sheetsWebhookRoutes);
-;
+
+// 🤖 INTERNAL MACHINE ROUTES (Apps Script) — x-api-key ONLY
+app.use("/api/internal", internalRoutes);
 
 // -------------------- HOME --------------------
 app.get("/", (req, res) => {
@@ -134,4 +132,3 @@ const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
