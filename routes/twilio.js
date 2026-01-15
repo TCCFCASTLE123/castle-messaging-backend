@@ -314,11 +314,11 @@ router.post("/inbound", async (req, res) => {
               `${(client_name || routingClient?.name || fromCanon)} sent you a text: "${preview}"` +
               (link ? `\nOpen: ${link}` : "");
 
-            await twilioClient.messages.create({
-              to: staffTo,
-              from: fromInternal,
-              body: alertText,
-            });
+         await twilioClient.messages.create({
+  to: staffTo,
+  messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID,
+  body: alertText,
+});
 
             console.log("🔔 Staff alert sent:", {
               client_id,
@@ -352,3 +352,4 @@ router.post("/inbound", async (req, res) => {
 });
 
 module.exports = router;
+
