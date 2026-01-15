@@ -175,8 +175,8 @@ router.post(
 
       // Save to DB
     // Save to DB
+// Save to DB
 const ts = new Date().toISOString();
-const userId = req.user?.id ?? null;
 
 const messageId = await new Promise((resolve, reject) => {
   db.run(
@@ -301,4 +301,5 @@ router.post("/note", (req, res) => {
 });
 
 module.exports = router;
+
 
