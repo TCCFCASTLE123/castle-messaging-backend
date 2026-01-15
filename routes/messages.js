@@ -100,6 +100,7 @@ router.post("/send", async (req, res) => {
   try {
     const text = (req.body.text || "").trim();
     const sender = (req.body.sender || "agent").trim();
+const userId = req.user?.id || null;
 
     const clientIdRaw = req.body.client_id ? String(req.body.client_id).trim() : "";
     const phoneRaw = req.body.phone ? String(req.body.phone).trim() : "";
@@ -267,3 +268,4 @@ router.post("/note", (req, res) => {
 });
 
 module.exports = router;
+
