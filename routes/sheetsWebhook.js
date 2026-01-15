@@ -25,7 +25,17 @@ const ALLOWED_CODES = new Set([
 
 function cleanCode(v) {
   const s = (v || "").toString().trim();
-  return ALLOWED_CODES.has(s) ? s : null;
+  if (!s) return null;
+  // if it matches your allowed set, keep it; otherwise still allow saving raw text
+  // (prevents “blank IC” if sheet has a slightly different value)
+  return ALLOWED_CODES.has(s) ? s : s;
+}
+
+function buildAppointmentDatetime(apptDate, apptTime) {
+  const d = (apptDate || "").toString().trim();
+  const t = (apptTime || "").toString().trim();
+  if (!d && !t) return null;
+  return `${d}${t ? " " + t : ""}`.trim();
 }
 
 function pick(row, ...keys) {
@@ -38,14 +48,6 @@ function pick(row, ...keys) {
   return "";
 }
 
-function buildAppointmentDatetime(apptDate, apptTime) {
-  const d = (apptDate || "").toString().trim();
-  const t = (apptTime || "").toString().trim();
-  if (!d && !t) return null;
-  return `${d}${t ? " " + t : ""}`.trim();
-}
-
-// lookup statuses.id by name (case-insensitive)
 function getStatusIdByName(statusText) {
   return new Promise((resolve, reject) => {
     const s = (statusText || "").trim();
@@ -75,21 +77,27 @@ router.post("/update", requireKey, async (req, res) => {
     const statusText = String(pick(row, "status", "STATUS")).trim();
     const status_id = await getStatusIdByName(statusText);
 
+    const caseGroup = String(pick(row, "case_group", "CR/IMM/BK?")).trim();
+
+    // ✅ main dropdown: Criminal/Immigration/Bankruptcy
+    const caseTypeMain = String(pick(row, "case_type")).trim();
+
+    // ✅ subtype: CI - Criminal Investigation, etc.
+    const caseSubtype = String(pick(row, "case_subtype", "CASE TYPE", "SUB CASE TYPE")).trim();
+
     const language = String(pick(row, "language", "SP/ENG?", "ENG/SP?")).trim();
 
-    // ✅ main + sub case types (your new script sends these)
-    const case_type = String(pick(row, "case_type")).trim();          // Criminal / Immigration / Bankruptcy
-    const case_subtype = String(pick(row, "case_subtype", "CASE TYPE", "SUB CASE TYPE")).trim(); // CI - ..., IMM - ...
+    const apptSetter = cleanCode(pick(row, "appt_setter", "APPT. SETTER"));
 
-    // ✅ IC + appt setter
-    const appt_setter = cleanCode(pick(row, "appt_setter", "APPT. SETTER"));
-    const ic = cleanCode(pick(row, "ic", "intake_coordinator", "I.C.", "INTAKE COORDINATOR"));
+    // ✅ accept both names
+    const icIncoming = pick(row, "ic", "intake_coordinator", "I.C.");
+    const ic = cleanCode(icIncoming);
+    const intake_coordinator = cleanCode(icIncoming);
 
-    // ✅ store split appt date/time too
+    // ✅ should already be formatted by Apps Script
     const appt_date = String(pick(row, "appt_date", "APPT. DATE")).trim() || null;
     const appt_time = String(pick(row, "appt_time", "APPT. TIME")).trim() || null;
 
-    // ✅ combined field for your card
     const appointment_datetime =
       buildAppointmentDatetime(appt_date, appt_time) ||
       String(pick(row, "appointment_at")).trim() ||
@@ -105,32 +113,22 @@ router.post("/update", requireKey, async (req, res) => {
     const finalOffice = office || null;
     const finalLanguage = language || null;
 
-    // Optional extra columns you already added
-    const case_group = String(pick(row, "case_group", "CR/IMM/BK?")).trim() || null;
+    // store main in case_type, detailed in case_subtype
+    const finalCaseType = caseTypeMain || null;
+    const finalCaseSubtype = caseSubtype || null;
 
     const sql = `
       INSERT INTO clients
         (
           name, phone, email, notes, language, office,
           case_type, case_subtype,
-          appointment_datetime,
-          appt_date, appt_time,
+          appt_date, appt_time, appointment_datetime,
           status_id, status_text,
-          case_group,
-          appt_setter,
-          ic,
-          intake_coordinator
+          case_group, appt_setter,
+          ic, intake_coordinator
         )
       VALUES
-        (?, ?, ?, ?, ?, ?,
-         ?, ?,
-         ?,
-         ?, ?,
-         ?, ?,
-         ?,
-         ?,
-         ?,
-         ?)
+        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(phone) DO UPDATE SET
         name = excluded.name,
         email = excluded.email,
@@ -141,15 +139,16 @@ router.post("/update", requireKey, async (req, res) => {
         case_type = excluded.case_type,
         case_subtype = excluded.case_subtype,
 
-        appointment_datetime = excluded.appointment_datetime,
         appt_date = excluded.appt_date,
         appt_time = excluded.appt_time,
+        appointment_datetime = excluded.appointment_datetime,
 
         status_id = excluded.status_id,
         status_text = excluded.status_text,
 
         case_group = excluded.case_group,
         appt_setter = excluded.appt_setter,
+
         ic = excluded.ic,
         intake_coordinator = excluded.intake_coordinator
     `;
@@ -164,21 +163,21 @@ router.post("/update", requireKey, async (req, res) => {
         finalLanguage,
         finalOffice,
 
-        case_type || null,
-        case_subtype || null,
-
-        appointment_datetime,
+        finalCaseType,
+        finalCaseSubtype,
 
         appt_date,
         appt_time,
+        appointment_datetime,
 
         status_id,
         statusText || null,
 
-        case_group,
-        appt_setter,
+        caseGroup || null,
+        apptSetter,
+
         ic,
-        ic, // intake_coordinator mirrors ic so your modal fills
+        intake_coordinator,
       ],
       function (err) {
         if (err) {
@@ -194,26 +193,39 @@ router.post("/update", requireKey, async (req, res) => {
             office: finalOffice,
             language: finalLanguage,
 
-            case_type: case_type || null,
-            case_subtype: case_subtype || null,
+            case_type: finalCaseType,
+            case_subtype: finalCaseSubtype,
 
-            appointment_datetime,
             appt_date,
             appt_time,
+            appointment_datetime,
 
             status_id,
             status_text: statusText || null,
-            case_group,
 
-            appt_setter,
+            case_group: caseGroup || null,
+            appt_setter: apptSetter,
+
             ic,
-            intake_coordinator: ic,
+            intake_coordinator,
 
             notes: notes || null,
           });
         }
 
-        return res.json({ ok: true });
+        return res.json({
+          ok: true,
+          status_id,
+          status_text: statusText || null,
+          saved: {
+            case_type: finalCaseType,
+            case_subtype: finalCaseSubtype,
+            appt_date,
+            appt_time,
+            ic,
+            intake_coordinator
+          }
+        });
       }
     );
   } catch (e) {
