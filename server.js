@@ -108,7 +108,7 @@ app.use("/api/messages", requireAuth, messageRoutes);
 app.use("/api/clients", requireAuth, clientRoutes);
 app.use("/api/statuses", requireAuth, statusRoutes);
 app.use("/api/templates", requireAuth, templateRoutes);
-app.use("/api/scheduled_messages", requireAuth, scheduledMEssagesRoutes);
+app.use("/api/scheduled_messages", requireAuth, scheduledMessagesRoutes);
 
 // 🌐 PUBLIC WEBHOOKS (Twilio + Sheets)
 app.use("/api/twilio", twilioRoutes);
@@ -132,4 +132,5 @@ const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
