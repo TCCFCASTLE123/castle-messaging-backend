@@ -45,7 +45,7 @@ const jwt = require("jsonwebtoken");
     }
 
     next();
-  } catch (e) {
+   catch (e) {
     return res.status(401).json({ ok: false, error: "Invalid token" });
   }
 }
@@ -154,6 +154,7 @@ const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
