@@ -44,12 +44,6 @@ const jwt = require("jsonwebtoken");
       return res.status(401).json({ ok: false, error: "Invalid token payload" });
     }
 
-    next();
-   catch (e) {
-    return res.status(401).json({ ok: false, error: "Invalid token" });
-  }
-}
-
 
 // -------------------- LOGGING --------------------
 app.use((req, res, next) => {
@@ -154,6 +148,7 @@ const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
