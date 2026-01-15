@@ -155,7 +155,7 @@ const userId = req.user?.id || null;
 
     const messageId = await new Promise((resolve, reject) => {
       db.run(
-        `INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id)
+      INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id, user_id)
          VALUES (?, ?, ?, ?, ?, ?)`,
         [client_id, sender, text, "outbound", ts, sent.sid],
         function (err) {
@@ -268,4 +268,5 @@ router.post("/note", (req, res) => {
 });
 
 module.exports = router;
+
 
