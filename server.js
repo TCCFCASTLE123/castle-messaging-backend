@@ -30,7 +30,7 @@ const server = http.createServer(app);
 
 const jwt = require("jsonwebtoken");
 
-    const token = h.slice("Bearer ".length).trim();
+  
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     // Support either { id } or { userId } depending on how you signed the JWT
@@ -133,6 +133,7 @@ app.use("/api/scheduled_messages", scheduledMessagesRoutes);
 app.use("/api/twilio", twilioRoutes);
 app.use("/api/sheets", sheetsWebhookRoutes);
 
+
 // -------------------- HOME --------------------
 app.get("/", (req, res) => {
   res.send("Castle Consulting Messaging API is running!");
@@ -148,6 +149,7 @@ const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
