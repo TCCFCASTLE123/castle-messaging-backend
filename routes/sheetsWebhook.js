@@ -28,9 +28,14 @@ function cleanCode(v) {
   return ALLOWED_CODES.has(s) ? s : null;
 }
 
+function cleanText(v) {
+  const s = (v ?? "").toString().trim();
+  return s ? s : null;
+}
+
 function buildAppointmentDatetime(apptDate, apptTime) {
-  const d = (apptDate || "").toString().trim();
-  const t = (apptTime || "").toString().trim();
+  const d = cleanText(apptDate);
+  const t = cleanText(apptTime);
   if (!d && !t) return null;
   return `${d}${t ? " " + t : ""}`.trim();
 }
@@ -45,6 +50,7 @@ function pick(row, ...keys) {
   return "";
 }
 
+// lookup statuses.id by name (case-insensitive)
 function getStatusIdByName(statusText) {
   return new Promise((resolve, reject) => {
     const s = (statusText || "").trim();
@@ -61,172 +67,133 @@ function getStatusIdByName(statusText) {
   });
 }
 
-// helper: treat null/"" as empty
-function isEmpty(v) {
-  return v === null || v === undefined || String(v).trim() === "";
-}
-
-// ✅ DAILY wins. CALL only fills blanks.
-function mergeByPriority(existing, incoming, source) {
-  if (!existing) return incoming;
-
-  // If DAILY, overwrite freely
-  if (String(source).toUpperCase() === "DAILY") return incoming;
-
-  // If CALL, only fill blanks (don’t overwrite good DAILY values)
-  if (String(source).toUpperCase() === "CALL") {
-    const out = { ...existing };
-
-    for (const k of Object.keys(incoming)) {
-      const incVal = incoming[k];
-      if (!isEmpty(incVal) && isEmpty(existing[k])) {
-        out[k] = incVal;
-      }
-    }
-    return out;
-  }
-
-  // default: overwrite
-  return incoming;
-}
-
 router.post("/update", requireKey, async (req, res) => {
   try {
     const payload = req.body || {};
     const row = payload.row || {};
-    const source = String(payload.source || "").toUpperCase(); // "DAILY" or "CALL"
 
-    const name = String(pick(row, "name", "full_name", "FULL NAME")).trim();
+    const name = cleanText(pick(row, "name", "full_name", "FULL NAME"));
     const phone = canonicalPhone(pick(row, "phone", "PHONE NUMBER"));
 
     if (!phone || phone.length !== 10) {
       return res.status(400).json({ ok: false, error: "Missing/invalid phone" });
     }
 
-    const email = String(pick(row, "email", "EMAIL")).trim() || null;
-    const office = String(pick(row, "office", "OFFICE")).trim() || null;
+    const email = cleanText(pick(row, "email", "EMAIL"));
+    const office = cleanText(pick(row, "office", "OFFICE"));
 
-    const statusText = String(pick(row, "status", "STATUS")).trim();
-    const status_id = await getStatusIdByName(statusText);
+    const statusText = cleanText(pick(row, "status", "STATUS"));
+    const status_id = await getStatusIdByName(statusText || "");
 
-    const caseGroup = String(pick(row, "case_group", "CR/IMM/BK?")).trim() || null;
+    // From sheet:
+    const caseGroup = cleanText(pick(row, "case_group", "CR/IMM/BK?"));       // "Criminal" / "Immigration" / etc (or CR/IMM/BK?)
+    const sheetCaseType = cleanText(pick(row, "case_type", "CASE TYPE"));     // "CI - Criminal Investigation" etc
 
-    // Your sheet "CASE TYPE" is usually the detailed value like "CI - Criminal Investigation"
-    // We'll store that in case_subtype, and keep case_type as the broad group if you want.
-    const caseSubtype = String(pick(row, "case_type", "CASE TYPE")).trim() || null;
+    const language = cleanText(pick(row, "language", "SP/ENG?", "ENG/SP?"));
 
-    const language = String(pick(row, "language", "SP/ENG?", "ENG/SP?")).trim() || null;
+    const apptSetter = cleanCode(pick(row, "appt_setter", "APPT. SETTER"));
+    const ic = cleanCode(pick(row, "ic", "I.C."));
 
-    const appt_setter = cleanCode(pick(row, "appt_setter", "APPT. SETTER")) || null;
-    const ic = cleanCode(pick(row, "ic", "I.C.")) || null;
-
-    // ✅ IMPORTANT: store these in their own columns so React can show them
-    const appt_date = String(pick(row, "appt_date", "APPT. DATE", "DATE")).trim() || null;
-    const appt_time = String(pick(row, "appt_time", "APPT. TIME", "TIME")).trim() || null;
+    const apptDate = cleanText(pick(row, "appt_date", "APPT. DATE"));
+    const apptTime = cleanText(pick(row, "appt_time", "APPT. TIME"));
 
     const appointment_datetime =
-      buildAppointmentDatetime(appt_date, appt_time) ||
-      String(pick(row, "appointment_at")).trim() ||
+      buildAppointmentDatetime(apptDate, apptTime) ||
+      cleanText(pick(row, "appointment_at")) ||
       null;
 
-    const notes = String(pick(row, "notes", "NOTES")).trim() || null;
+    const notes = cleanText(pick(row, "notes", "NOTES"));
 
-    // Decide what you want "case_type" to be:
-    // - broad group (Criminal/Immigration/Bankruptcy) from CR/IMM/BK?
-    // - or the detailed thing from CASE TYPE
-    // I recommend:
-    //   case_type = broad group
-    //   case_subtype = detailed case type
+    // ✅ FIX: case_type should be broad (Criminal/Immigration/Bankruptcy)
+    // ✅ FIX: case_subtype should be the detailed sheet case type
     const case_type = (caseGroup || "").trim() || null;
+    const case_subtype = (sheetCaseType || "").trim() || null;
 
-    // pull existing row so we can do DAILY-overrides/CALL-fill-blanks logic
-    db.get("SELECT * FROM clients WHERE phone = ?", [phone], async (err, existing) => {
-      if (err) {
-        console.error("❌ sheets webhook select existing error:", err.message);
-        return res.status(500).json({ ok: false, error: err.message });
-      }
+    const sql = `
+      INSERT INTO clients
+        (
+          name, phone, email, notes, language, office,
+          case_type, case_subtype,
+          appt_setter, ic,
+          appt_date, appt_time,
+          appointment_datetime,
+          status_id, status_text, case_group
+        )
+      VALUES
+        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(phone) DO UPDATE SET
+        name = COALESCE(excluded.name, clients.name),
+        email = COALESCE(excluded.email, clients.email),
+        notes = COALESCE(excluded.notes, clients.notes),
+        language = COALESCE(excluded.language, clients.language),
+        office = COALESCE(excluded.office, clients.office),
 
-      const incoming = {
-        name: name || (existing?.name || `Sheet ${phone}`),
+        case_type = COALESCE(excluded.case_type, clients.case_type),
+        case_subtype = COALESCE(excluded.case_subtype, clients.case_subtype),
+
+        appt_setter = COALESCE(excluded.appt_setter, clients.appt_setter),
+        ic = COALESCE(excluded.ic, clients.ic),
+
+        appt_date = COALESCE(excluded.appt_date, clients.appt_date),
+        appt_time = COALESCE(excluded.appt_time, clients.appt_time),
+
+        appointment_datetime = COALESCE(excluded.appointment_datetime, clients.appointment_datetime),
+
+        status_id = COALESCE(excluded.status_id, clients.status_id),
+        status_text = COALESCE(excluded.status_text, clients.status_text),
+        case_group = COALESCE(excluded.case_group, clients.case_group)
+    `;
+
+    db.run(
+      sql,
+      [
+        name || `Sheet ${phone}`,
         phone,
         email,
         notes,
         language,
         office,
         case_type,
-        case_subtype: caseSubtype,
+        case_subtype,
+        apptSetter,
+        ic,
+        apptDate,
+        apptTime,
         appointment_datetime,
         status_id,
-        status_text: statusText || null,
-        case_group: caseGroup,
-        appt_setter,
-        ic,
-        appt_date,
-        appt_time,
-      };
-
-      const merged = mergeByPriority(existing, incoming, source);
-
-      const sql = `
-        INSERT INTO clients
-          (name, phone, email, notes, language, office,
-           case_type, case_subtype,
-           appointment_datetime, status_id, status_text, case_group,
-           appt_setter, ic, appt_date, appt_time)
-        VALUES
-          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(phone) DO UPDATE SET
-          name = excluded.name,
-          email = excluded.email,
-          notes = excluded.notes,
-          language = excluded.language,
-          office = excluded.office,
-          case_type = excluded.case_type,
-          case_subtype = excluded.case_subtype,
-          appointment_datetime = excluded.appointment_datetime,
-          status_id = excluded.status_id,
-          status_text = excluded.status_text,
-          case_group = excluded.case_group,
-          appt_setter = excluded.appt_setter,
-          ic = excluded.ic,
-          appt_date = excluded.appt_date,
-          appt_time = excluded.appt_time
-      `;
-
-      db.run(
-        sql,
-        [
-          merged.name,
-          merged.phone,
-          merged.email,
-          merged.notes,
-          merged.language,
-          merged.office,
-          merged.case_type,
-          merged.case_subtype,
-          merged.appointment_datetime,
-          merged.status_id,
-          merged.status_text,
-          merged.case_group,
-          merged.appt_setter,
-          merged.ic,
-          merged.appt_date,
-          merged.appt_time,
-        ],
-        function (uErr) {
-          if (uErr) {
-            console.error("❌ sheets webhook upsert error:", uErr.message);
-            return res.status(500).json({ ok: false, error: uErr.message });
-          }
-
-          if (req.io) {
-            req.io.emit("client_updated", merged);
-          }
-
-          return res.json({ ok: true, source, status_id: merged.status_id });
+        statusText,
+        caseGroup,
+      ],
+      function (err) {
+        if (err) {
+          console.error("❌ sheets webhook upsert error:", err.message);
+          return res.status(500).json({ ok: false, error: err.message });
         }
-      );
-    });
+
+        if (req.io) {
+          req.io.emit("client_updated", {
+            phone,
+            name: name || `Sheet ${phone}`,
+            email,
+            office,
+            language,
+            case_type,
+            case_subtype,
+            appt_setter: apptSetter,
+            ic,
+            appt_date: apptDate,
+            appt_time: apptTime,
+            appointment_datetime,
+            status_id,
+            status_text: statusText,
+            case_group: caseGroup,
+            notes,
+          });
+        }
+
+        return res.json({ ok: true, status_id, phone });
+      }
+    );
   } catch (e) {
     console.error("❌ sheets webhook crashed:", e);
     return res.status(500).json({ ok: false, error: "Server error" });
