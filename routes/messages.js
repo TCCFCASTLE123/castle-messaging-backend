@@ -5,6 +5,9 @@ const twilio = require("twilio");
 const db = require("../db");
 const normalizePhone = require("../utils/normalizePhone");
 
+// ✅ IMPORTANT: requireAuth so req.user is populated (username + id)
+const { requireAuth } = require("./auth");
+
 // Twilio client
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -13,7 +16,7 @@ const twilioClient = twilio(
 
 const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
 
-// Helper: client table stores 10-digit phone
+// Helper: clients table stores 10-digit phone
 function canon10(input) {
   if (!input) return "";
   return String(input).replace(/\D/g, "").slice(-10);
@@ -96,18 +99,20 @@ router.get("/conversation/:client_id", (req, res) => {
  * POST /api/messages/send
  * Sends an SMS (Twilio) AND saves message in DB AND emits socket event
  * Body: { client_id?, phone?, text, sender? }
+ *
+ * ✅ FIX: requireAuth ensures req.user is populated
  */
-router.post("/send", async (req, res) => {
+router.post("/send", requireAuth, async (req, res) => {
   try {
     const text = (req.body.text || "").trim();
 
-    // ✅ who sent it
+    // ✅ who sent it (now req.user will exist)
     const sender =
       (req.user?.username && String(req.user.username).trim()) ||
       (req.body.sender && String(req.body.sender).trim()) ||
       "agent";
 
-    // ✅ who (user_id) if auth middleware exists
+    // ✅ user id for routing / staff alerts
     const userId = req.user?.id ?? null;
 
     const clientIdRaw = req.body.client_id ? String(req.body.client_id).trim() : "";
@@ -140,7 +145,7 @@ router.post("/send", async (req, res) => {
 
     const client_id = clientRow.id;
 
-    // Twilio needs E.164; clientRow.phone is canonical 10 digits in DB
+    // Twilio needs E.164; DB stores 10-digit so normalize here for Twilio only
     const to = normalizePhone(clientRow.phone);
 
     if (!to) {
@@ -179,7 +184,7 @@ router.post("/send", async (req, res) => {
       );
     });
 
-    // ✅ Persist ordering
+    // ✅ Persist phone-like ordering
     db.run(
       `UPDATE clients SET last_message_at = ?, last_message_text = ? WHERE id = ?`,
       [ts, text, client_id],
@@ -228,13 +233,11 @@ router.post("/note", (req, res) => {
 
   const text = (req.body.text || "").trim();
 
-  // ✅ who wrote the note
   const sender =
     (req.user?.username && String(req.user.username).trim()) ||
     (req.body.sender && String(req.body.sender).trim()) ||
     "agent";
 
-  // If auth middleware exists globally, this may be populated; otherwise null.
   const userId = req.user?.id ?? null;
 
   if (!phone10 || !text) {
@@ -253,7 +256,6 @@ router.post("/note", (req, res) => {
     db.run(
       `INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id, user_id)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      // ✅ direction = "note" so it doesn't act like an outbound SMS
       [row.id, sender, text, "note", ts, null, userId],
       function (msgErr) {
         if (msgErr) {
@@ -261,7 +263,7 @@ router.post("/note", (req, res) => {
           return res.status(500).json({ ok: false, error: msgErr.message });
         }
 
-        // ✅ Persist ordering for notes too (keeps client pinned to top if you want that)
+        // ordering
         db.run(
           `UPDATE clients SET last_message_at = ?, last_message_text = ? WHERE id = ?`,
           [ts, text, row.id],
