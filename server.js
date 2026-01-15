@@ -104,17 +104,20 @@ ensureClientColumns();
 twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
 // -------------------- API ROUTES --------------------
+// -------------------- API ROUTES --------------------
 app.use("/api/auth", authRoutes);
 
-// ✅ Option A: protect ALL /api/messages routes (req.user will exist in routes/messages.js)
+// 🔐 PROTECTED ROUTES
 app.use("/api/messages", requireAuth, messageRoutes);
+app.use("/api/clients", requireAuth, clientRoutes);
+app.use("/api/statuses", requireAuth, statusRoutes);
+app.use("/api/templates", requireAuth, templateRoutes);
+app.use("/api/scheduled_messages", requireAuth, scheduledMessagesRoutes);
 
-app.use("/api/clients", clientRoutes);
-app.use("/api/statuses", statusRoutes);
-app.use("/api/templates", templateRoutes);
-app.use("/api/scheduled_messages", scheduledMessagesRoutes);
+// 🌐 PUBLIC ROUTES
 app.use("/api/twilio", twilioRoutes);
 app.use("/api/sheets", sheetsWebhookRoutes);
+;
 
 // -------------------- HOME --------------------
 app.get("/", (req, res) => {
@@ -131,3 +134,4 @@ const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
