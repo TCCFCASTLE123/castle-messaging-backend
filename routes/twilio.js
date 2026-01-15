@@ -27,62 +27,62 @@ const STAFF = {
 
 // Aliases → staff code (helps match sheet values like "Gabe", "Gabriel Cano", etc.)
 const STAFF_ALIASES = {
-  "agp": "agp",
-  "ana": "agp",
+  agp: "agp",
+  ana: "agp",
   "ana puig": "agp",
 
-  "cc": "cc",
-  "chris": "cc",
+  cc: "cc",
+  chris: "cc",
   "chris castle": "cc",
 
-  "clc": "clc",
-  "cass": "clc",
-  "cassandra": "clc",
+  clc: "clc",
+  cass: "clc",
+  cassandra: "clc",
   "cassandra castle": "clc",
 
-  "dt": "dt",
-  "dean": "dt",
+  dt: "dt",
+  dean: "dt",
   "dean turnbow": "dt",
 
-  "gbc": "gbc",
-  "gabe": "gbc",
-  "gabriel": "gbc",
+  gbc: "gbc",
+  gabe: "gbc",
+  gabriel: "gbc",
   "gabriel cano": "gbc",
 
-  "ild": "ild",
-  "itzayani": "ild",
+  ild: "ild",
+  itzayani: "ild",
   "itzayani luque": "ild",
 
-  "jmp": "jmp",
-  "janny": "jmp",
+  jmp: "jmp",
+  janny: "jmp",
   "janny mancinas": "jmp",
 
-  "jh": "jh",
-  "josh": "jh",
+  jh: "jh",
+  josh: "jh",
   "josh hall": "jh",
 
-  "jwg": "jwg",
-  "jacob": "jwg",
+  jwg: "jwg",
+  jacob: "jwg",
   "jacob gray": "jwg",
 
-  "oxs": "oxs",
-  "omar": "oxs",
+  oxs: "oxs",
+  omar: "oxs",
   "omar solano": "oxs",
 
-  "oac": "oac",
-  "oscar": "oac",
+  oac: "oac",
+  oscar: "oac",
   "oscar castellanos": "oac",
 
-  "nva": "nva",
-  "nadean": "nva",
+  nva: "nva",
+  nadean: "nva",
   "nadean accra": "nva",
 
-  "trd": "trd",
-  "tyler": "trd",
+  trd: "trd",
+  tyler: "trd",
   "tyler durham": "trd",
 
-  "rp": "rp",
-  "rebeca": "rp",
+  rp: "rp",
+  rebeca: "rp",
   "rebeca perez": "rp",
 };
 
@@ -102,27 +102,21 @@ function toE164US(digitsOrFormatted) {
   return "";
 }
 
-// Prefer appt_setter → ic → intake_coordinator
-function pickStaffE164FromClient(client) {
-  const candidates = [client?.appt_setter, client?.ic, client?.intake_coordinator]
-    .map(normalizeName)
-    .filter(Boolean);
+// Generic staff picker by name/code (for IC / Appt Setter fallback)
+function pickStaffE164FromName(value) {
+  const raw = normalizeName(value);
+  if (!raw) return "";
 
-  for (const raw of candidates) {
-    // If the sheet stores a code like "GBC"
-    const compact = raw.replace(/\s/g, "");
-    const directCode = STAFF_ALIASES[compact] || compact;
-    if (STAFF[directCode]) return toE164US(STAFF[directCode].phone);
+  const compact = raw.replace(/\s/g, "");
+  const directCode = STAFF_ALIASES[compact] || compact;
+  if (STAFF[directCode]) return toE164US(STAFF[directCode].phone);
 
-    // Try full string alias
-    const codeFull = STAFF_ALIASES[raw];
-    if (codeFull && STAFF[codeFull]) return toE164US(STAFF[codeFull].phone);
+  const codeFull = STAFF_ALIASES[raw];
+  if (codeFull && STAFF[codeFull]) return toE164US(STAFF[codeFull].phone);
 
-    // Try first token (e.g., "Gabe S" -> "gabe")
-    const first = raw.split(" ")[0];
-    const codeFirst = STAFF_ALIASES[first];
-    if (codeFirst && STAFF[codeFirst]) return toE164US(STAFF[codeFirst].phone);
-  }
+  const first = raw.split(" ")[0];
+  const codeFirst = STAFF_ALIASES[first];
+  if (codeFirst && STAFF[codeFirst]) return toE164US(STAFF[codeFirst].phone);
 
   return "";
 }
@@ -137,6 +131,12 @@ function canSendAlertNow(client_id) {
   if (now - last < ALERT_COOLDOWN_MS) return false;
   lastAlertByClientId.set(client_id, now);
   return true;
+}
+
+function dbGet(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row || null)));
+  });
 }
 
 const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -253,29 +253,59 @@ router.post("/inbound", async (req, res) => {
     }
 
     // -------------------------------------------------
-    // NEW: Staff alert SMS (appt_setter → ic → intake_coordinator)
+    // NEW: Staff alert SMS routing
+    // Priority: (1) last outbound sender (2) IC (3) Appt Setter
     // -------------------------------------------------
     try {
-      // Only alert if we can and cooldown allows
       if (twilioClient && canSendAlertNow(client_id)) {
-        // We might need fresher client routing fields if it was a placeholder client
-        let routingClient = clientRow;
-        if (!routingClient) {
-          routingClient = await new Promise((resolve, reject) => {
-            db.get(
-              "SELECT id, name, phone, appt_setter, ic, intake_coordinator FROM clients WHERE id = ?",
-              [client_id],
-              (err, row) => (err ? reject(err) : resolve(row || null))
-            );
-          });
+        const routingClient =
+          clientRow ||
+          (await dbGet(
+            "SELECT id, name, phone, appt_setter, ic, intake_coordinator FROM clients WHERE id = ?",
+            [client_id]
+          ));
+
+        // 1) Last outbound sender (requires messages.user_id + users.cell_phone)
+        const lastOut = await dbGet(
+          `SELECT user_id
+           FROM messages
+           WHERE client_id = ?
+             AND direction = 'outbound'
+             AND user_id IS NOT NULL
+           ORDER BY timestamp DESC
+           LIMIT 1`,
+          [client_id]
+        );
+
+        let staffTo = "";
+
+        if (lastOut?.user_id) {
+          const user = await dbGet(
+            `SELECT id, cell_phone FROM users WHERE id = ?`,
+            [lastOut.user_id]
+          );
+          if (user?.cell_phone) {
+            staffTo = toE164US(user.cell_phone);
+          }
         }
 
-        const staffTo = pickStaffE164FromClient(routingClient || {});
+        // 2) IC (ic or intake_coordinator)
+        if (!staffTo) {
+          staffTo =
+            pickStaffE164FromName(routingClient?.ic) ||
+            pickStaffE164FromName(routingClient?.intake_coordinator) ||
+            "";
+        }
+
+        // 3) Appt Setter
+        if (!staffTo) {
+          staffTo = pickStaffE164FromName(routingClient?.appt_setter) || "";
+        }
+
         const baseUrl = process.env.FRONTEND_URL || "";
         const link = baseUrl ? `${baseUrl}/inbox?clientId=${client_id}` : "";
         const preview = body.slice(0, 160);
 
-        // Send only if we found a staff recipient
         if (staffTo) {
           const fromInternal =
             process.env.TWILIO_INTERNAL_FROM || process.env.TWILIO_PHONE_NUMBER || "";
@@ -290,17 +320,21 @@ router.post("/inbound", async (req, res) => {
               body: alertText,
             });
 
-            console.log("🔔 Staff alert sent:", { client_id, to: staffTo });
+            console.log("🔔 Staff alert sent:", {
+              client_id,
+              to: staffTo,
+              last_user_id: lastOut?.user_id || null,
+            });
           } else {
             console.warn("⚠️ No TWILIO_INTERNAL_FROM or TWILIO_PHONE_NUMBER set; cannot send staff alert.");
           }
         } else {
-          // no match found—quietly do nothing
-          console.log("ℹ️ No staff match for alert (appt_setter/ic/intake_coordinator).", {
+          console.log("ℹ️ No staff recipient found (lastOut/IC/appt_setter).", {
             client_id,
-            appt_setter: routingClient?.appt_setter,
+            last_user_id: lastOut?.user_id || null,
             ic: routingClient?.ic,
             intake_coordinator: routingClient?.intake_coordinator,
+            appt_setter: routingClient?.appt_setter,
           });
         }
       }
