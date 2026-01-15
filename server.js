@@ -28,23 +28,6 @@ const db = require("./db");
 const app = express();
 const server = http.createServer(app);
 
-const jwt = require("jsonwebtoken");
-
-  
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-    // Support either { id } or { userId } depending on how you signed the JWT
-    req.user = {
-      id: decoded.id ?? decoded.userId ?? decoded.user_id ?? null,
-      username: decoded.username,
-      role: decoded.role,
-    };
-
-    if (!req.user.id) {
-      return res.status(401).json({ ok: false, error: "Invalid token payload" });
-    }
-
-
 // -------------------- LOGGING --------------------
 app.use((req, res, next) => {
   console.log("➡️", req.method, req.url);
@@ -118,21 +101,20 @@ function ensureClientColumns() {
 ensureClientColumns();
 
 // -------------------- TWILIO SETUP --------------------
-twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
+twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
 // -------------------- API ROUTES --------------------
 app.use("/api/auth", authRoutes);
+
+// ✅ Option A: protect ALL /api/messages routes (req.user will exist in routes/messages.js)
 app.use("/api/messages", requireAuth, messageRoutes);
+
 app.use("/api/clients", clientRoutes);
 app.use("/api/statuses", statusRoutes);
 app.use("/api/templates", templateRoutes);
 app.use("/api/scheduled_messages", scheduledMessagesRoutes);
 app.use("/api/twilio", twilioRoutes);
 app.use("/api/sheets", sheetsWebhookRoutes);
-
 
 // -------------------- HOME --------------------
 app.get("/", (req, res) => {
@@ -149,11 +131,3 @@ const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
-
-
-
-
-
-
-
-
