@@ -30,12 +30,6 @@ const server = http.createServer(app);
 
 const jwt = require("jsonwebtoken");
 
-function requireAuth(req, res, next) {
-  try {
-    const h = req.headers.authorization || "";
-    if (!h.startsWith("Bearer ")) {
-      return res.status(401).json({ ok: false, error: "Missing token" });
-    }
     const token = h.slice("Bearer ".length).trim();
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
@@ -160,6 +154,7 @@ const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
