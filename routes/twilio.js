@@ -348,7 +348,7 @@ try {
 const user = await dbGet("SELECT username FROM users WHERE id = ?", [lastOut.user_id]);
 emailTo = pickStaffEmailFromName(user?.username) || null;
 
-  }
+  
 
   // 2) IC fallback
   if (!emailTo) {
@@ -419,6 +419,7 @@ emailTo = pickStaffEmailFromName(user?.username) || null;
 });
 
 module.exports = router;
+
 
 
 
