@@ -321,8 +321,8 @@ router.post("/inbound", async (req, res) => {
           staffTo = pickStaffE164FromName(routingClient?.appt_setter) || "";
         }
 
-        const baseUrl = process.env.FRONTEND_URL || "";
-        const link = baseUrl ? `${baseUrl}/inbox?clientId=${client_id}` : "";
+        const baseUrl = (process.env.FRONTEND_URL || "").replace(/\/+$/, "");
+const link = baseUrl ? `${baseUrl}/inbox?clientId=${client_id}` : "";
         const preview = body.slice(0, 160);
 
         if (staffTo) {
@@ -428,6 +428,7 @@ if (lastUserId) {
 });
 
 module.exports = router;
+
 
 
 
