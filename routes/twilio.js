@@ -344,9 +344,18 @@ router.post("/inbound", async (req, res) => {
 try {
   let emailTo = null;
 
-  // 1) Last outbound user
-const user = await dbGet("SELECT username FROM users WHERE id = ?", [lastOut.user_id]);
-emailTo = pickStaffEmailFromName(user?.username) || null;
+// 1) Last outbound user
+const lastUserId = lastOut?.user_id || null;
+
+if (lastUserId) {
+  const user = await dbGet(
+    "SELECT username FROM users WHERE id = ?",
+    [lastUserId]
+  );
+
+  emailTo = pickStaffEmailFromName(user?.username) || null;
+}
+
 
   
 
@@ -419,6 +428,7 @@ emailTo = pickStaffEmailFromName(user?.username) || null;
 });
 
 module.exports = router;
+
 
 
 
