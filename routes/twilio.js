@@ -334,10 +334,18 @@ const link = `${baseUrl}/inbox?clientId=${client_id}`;
               `${(client_name || routingClient?.name || fromCanon)} sent you a text: "${preview}"` +
               (link ? `\nOpen: ${link}` : "");
 
-         await twilioClient.messages.create({
+const msg = {
   to: staffTo,
-  messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID,
   body: alertText,
+};
+
+if (process.env.TWILIO_INTERNAL_MESSAGING_SERVICE_SID) {
+  msg.messagingServiceSid = process.env.TWILIO_INTERNAL_MESSAGING_SERVICE_SID;
+} else {
+  msg.from = process.env.TWILIO_INTERNAL_FROM || process.env.TWILIO_PHONE_NUMBER || "";
+}
+
+await twilioClient.messages.create(msg);
 });
             // ----------------------------
 // EMAIL ALERT (independent of SMS)
@@ -429,6 +437,7 @@ if (lastUserId) {
 });
 
 module.exports = router;
+
 
 
 
