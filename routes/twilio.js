@@ -9,21 +9,22 @@ const MessagingResponse = twilio.twiml.MessagingResponse;
 // Staff routing map + helpers
 // ----------------------------
 const STAFF = {
-  agp: { name: "Ana Puig", phone: "2392183986" },
-  cc: { name: "Chris Castle", phone: "8588294287" },
-  clc: { name: "Cassandra Castle", phone: "6027960878" },
-  dt: { name: "Dean Turnbow", phone: "6026976730" },
-  gbc: { name: "Gabriel Cano", phone: "4807404184" },
-  ild: { name: "Itzayani Luque", phone: "6233135868" },
-  jmp: { name: "Janny Mancinas", phone: "4803528900" },
-  jh: { name: "Josh Hall", phone: "6024603599" },
-  jwg: { name: "Jacob Gray", phone: "4808260509" },
-  oxs: { name: "Omar Solano", phone: "8478079644" },
-  oac: { name: "Oscar Castellanos", phone: "5626744968" },
-  nva: { name: "Nadean Accra", phone: "4807097993" },
-  trd: { name: "Tyler Durham", phone: "6027403867" },
-  rp: { name: "Rebeca Perez", phone: "6196323950" },
+  agp: { name: "Ana Puig", phone: "2392183986", email: "ana@mayestelles.com" },
+  cc:  { name: "Chris Castle", phone: "8588294287", email: "chris@mayestelles.com" },
+  clc: { name: "Cassandra Castle", phone: "6027960878", email: "cassandra@mayestelles.com" },
+  dt:  { name: "Dean Turnbow", phone: "6026976730", email: "dean@mayestelles.com" },
+  gbc: { name: "Gabriel Cano", phone: "4807404184", email: "gcano@mayestelles.com" },
+  ild: { name: "Itzayani Luque", phone: "6233135868", email: "itzy@mayestelles.com" },
+  jmp: { name: "Janny Mancinas", phone: "4803528900", email: "janny@mayestelles.com" },
+  jh:  { name: "Josh Hall", phone: "6024603599", email: "josh@mayestelles.com" },
+  jwg: { name: "Jacob Gray", phone: "4808260509", email: "jacob@mayestelles.com" },
+  oxs: { name: "Omar Solano", phone: "8478079644", email: "omar@mayestelles.com" },
+  oac: { name: "Oscar Castellanos", phone: "5626744968", email: "oscar@mayestelles.com" },
+  nva: { name: "Nadean Accra", phone: "4807097993", email: "nadean@mayestelles.com" },
+  trd: { name: "Tyler Durham", phone: "6027403867", email: "tyler@mayestelles.com" },
+  rp:  { name: "Rebeca Perez", phone: "6196323950", email: "rperez@mayestelles.com" },
 };
+
 
 // Aliases → staff code (helps match sheet values like "Gabe", "Gabriel Cano", etc.)
 const STAFF_ALIASES = {
@@ -120,6 +121,24 @@ function pickStaffE164FromName(value) {
 
   return "";
 }
+function pickStaffEmailFromName(value) {
+  const raw = normalizeName(value);
+  if (!raw) return "";
+
+  const compact = raw.replace(/\s/g, "");
+  const directCode = STAFF_ALIASES[compact] || compact;
+  if (STAFF[directCode]?.email) return STAFF[directCode].email;
+
+  const codeFull = STAFF_ALIASES[raw];
+  if (codeFull && STAFF[codeFull]?.email) return STAFF[codeFull].email;
+
+  const first = raw.split(" ")[0];
+  const codeFirst = STAFF_ALIASES[first];
+  if (codeFirst && STAFF[codeFirst]?.email) return STAFF[codeFirst].email;
+
+  return "";
+}
+
 
 // Cooldown per client (avoid spamming staff if client sends many texts quickly)
 const ALERT_COOLDOWN_MS = Number(process.env.INBOUND_ALERT_COOLDOWN_MS || 60_000);
@@ -326,12 +345,9 @@ try {
   let emailTo = null;
 
   // 1) Last outbound user
-  if (lastOut?.user_id) {
-    const user = await dbGet(
-      "SELECT email FROM users WHERE id = ?",
-      [lastOut.user_id]
-    );
-    emailTo = user?.email || null;
+const user = await dbGet("SELECT username FROM users WHERE id = ?", [lastOut.user_id]);
+emailTo = pickStaffEmailFromName(user?.username) || null;
+
   }
 
   // 2) IC fallback
@@ -403,6 +419,7 @@ try {
 });
 
 module.exports = router;
+
 
 
 
