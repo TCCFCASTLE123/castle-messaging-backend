@@ -346,7 +346,6 @@ if (process.env.TWILIO_INTERNAL_MESSAGING_SERVICE_SID) {
 }
 
 await twilioClient.messages.create(msg);
-});
             // ----------------------------
 // EMAIL ALERT (independent of SMS)
 // ----------------------------
@@ -437,6 +436,7 @@ if (lastUserId) {
 });
 
 module.exports = router;
+
 
 
 
