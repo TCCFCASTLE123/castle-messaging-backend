@@ -51,6 +51,48 @@ async function findClientByPhone(toRaw) {
   );
 }
 
+function buildFrontendInboxLink() {
+  const baseUrl = String(process.env.FRONTEND_URL || "")
+    .trim()
+    .replace(/\/+$/, "");
+  return baseUrl ? `${baseUrl}/inbox` : "";
+}
+
+/**
+ * INTERNAL sending helper (compliance-first)
+ * Uses Messaging Service if present; falls back to internal FROM number.
+ */
+async function sendInternalSms({ to, body }) {
+  const msg = { to, body };
+
+  if (process.env.TWILIO_INTERNAL_MESSAGING_SERVICE_SID) {
+    msg.messagingServiceSid = process.env.TWILIO_INTERNAL_MESSAGING_SERVICE_SID;
+  } else if (process.env.TWILIO_INTERNAL_FROM) {
+    msg.from = process.env.TWILIO_INTERNAL_FROM;
+  } else {
+    throw new Error("Missing TWILIO_INTERNAL_MESSAGING_SERVICE_SID and TWILIO_INTERNAL_FROM");
+  }
+
+  return await twilioClient.messages.create(msg);
+}
+
+/**
+ * CLIENT-FACING sending helper (your existing behavior)
+ */
+async function sendClientSms({ to, body }) {
+  if (!process.env.TWILIO_PHONE_NUMBER) {
+    throw new Error("TWILIO_PHONE_NUMBER not set");
+  }
+  return await twilioClient.messages.create({
+    to,
+    from: process.env.TWILIO_PHONE_NUMBER,
+    body,
+  });
+}
+
+/**
+ * Existing route: sends SMS to a CLIENT and stores in messages table.
+ */
 router.post("/send-sms", requireInternalKey, async (req, res) => {
   try {
     const to = String(req.body.phone || "").trim();
@@ -59,19 +101,14 @@ router.post("/send-sms", requireInternalKey, async (req, res) => {
     const timestamp = new Date().toISOString();
 
     if (!to || !text) return res.status(400).json({ message: "phone and text required" });
-    if (!process.env.TWILIO_PHONE_NUMBER) return res.status(500).json({ message: "TWILIO_PHONE_NUMBER not set" });
 
     const client = await findClientByPhone(to);
     if (!client?.id) {
       return res.status(400).json({ message: "Could not match client by phone", to });
     }
 
-    // 1) Send Twilio
-    const tw = await twilioClient.messages.create({
-      to,
-      from: process.env.TWILIO_PHONE_NUMBER,
-      body: text,
-    });
+    // 1) Send Twilio (client-facing)
+    const tw = await sendClientSms({ to, body: text });
 
     // 2) Save to DB (MATCHES YOUR SCHEMA)
     await dbRun(
@@ -97,6 +134,50 @@ router.post("/send-sms", requireInternalKey, async (req, res) => {
   } catch (err) {
     console.error("❌ /api/internal/send-sms error:", err);
     return res.status(500).json({ message: "Internal send failed", error: String(err?.message || err) });
+  }
+});
+
+/**
+ * NEW route: sends SMS to a TEAM MEMBER (internal notification).
+ * Does NOT write to client messages table by default.
+ *
+ * Body:
+ *  {
+ *    "phone": "+1602....",          // staff phone
+ *    "clientName": "Cass",          // optional
+ *    "preview": "Test",             // optional
+ *    "clientId": 513                // optional
+ *  }
+ */
+router.post("/notify-team", requireInternalKey, async (req, res) => {
+  try {
+    const to = String(req.body.phone || "").trim();
+    if (!to) return res.status(400).json({ message: "phone required" });
+
+    const clientName = String(req.body.clientName || "Client").trim();
+    const preview = String(req.body.preview || "New message").trim();
+    const clientId = req.body.clientId != null ? Number(req.body.clientId) : null;
+
+    const link = buildFrontendInboxLink(); // inbox-only per your preference
+
+    const lines = [];
+    lines.push(`New inbound SMS from ${clientName}:`);
+    lines.push("");
+    lines.push(`"${preview.slice(0, 160)}"`);
+    if (link) {
+      lines.push("");
+      lines.push("Open conversation:");
+      lines.push(link);
+    }
+
+    const body = lines.join("\n");
+
+    const tw = await sendInternalSms({ to, body });
+
+    return res.json({ success: true, sid: tw.sid });
+  } catch (err) {
+    console.error("❌ /api/internal/notify-team error:", err);
+    return res.status(500).json({ message: "Notify failed", error: String(err?.message || err) });
   }
 });
 
