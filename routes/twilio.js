@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const twilio = require("twilio");
 const db = require("../db");
-
+const { sendEmail } = require("../utils/mailer");
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
 // ----------------------------
@@ -319,6 +319,57 @@ router.post("/inbound", async (req, res) => {
   messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID,
   body: alertText,
 });
+            // ----------------------------
+// EMAIL ALERT (independent of SMS)
+// ----------------------------
+try {
+  let emailTo = null;
+
+  // 1) Last outbound user
+  if (lastOut?.user_id) {
+    const user = await dbGet(
+      "SELECT email FROM users WHERE id = ?",
+      [lastOut.user_id]
+    );
+    emailTo = user?.email || null;
+  }
+
+  // 2) IC fallback
+  if (!emailTo) {
+    emailTo =
+      pickStaffEmailFromName(routingClient?.ic) ||
+      pickStaffEmailFromName(routingClient?.intake_coordinator) ||
+      null;
+  }
+
+  // 3) Appt setter fallback
+  if (!emailTo) {
+    emailTo = pickStaffEmailFromName(routingClient?.appt_setter) || null;
+  }
+
+  if (emailTo) {
+    const baseUrl = process.env.FRONTEND_URL || "";
+    const link = baseUrl
+      ? `${baseUrl}/inbox?clientId=${client_id}`
+      : "(open CRM)";
+
+    const preview = body.slice(0, 300);
+
+    await sendEmail({
+      to: emailTo,
+      subject: `New message from ${client_name || "Client"}`,
+      text:
+        `New inbound SMS from ${client_name || "Client"}:\n\n` +
+        `"${preview}"\n\n` +
+        `Open conversation:\n${link}`,
+    });
+  } else {
+    console.log("📧 No email recipient found for client", client_id);
+  }
+} catch (emailErr) {
+  console.error("❌ Email alert failed:", emailErr.message);
+}
+
 
             console.log("🔔 Staff alert sent:", {
               client_id,
@@ -352,4 +403,5 @@ router.post("/inbound", async (req, res) => {
 });
 
 module.exports = router;
+
 
