@@ -16,14 +16,15 @@ router.post("/", (req, res) => {
   if (!template) return res.status(400).json({ error: "Template message required" });
 
   db.run(
-    `INSERT INTO templates (status, office, case_type, appointment_type, language, delay_hours, template, active)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO templates (status, office, case_type, appointment_type, language, delay_hours, template, active, attorney_assigned)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       status || "",
       office || "",
       case_type || "",
       appointment_type || "",
       language || "",
+       attorney_assigned || "",  
       Number(delay_hours || 0),
       template,
       active ? 1 : 0,
@@ -89,4 +90,5 @@ router.get('/:id', (req, res) => {
 });
 
 module.exports = router;
+
 
