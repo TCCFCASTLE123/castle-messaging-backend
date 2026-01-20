@@ -16,10 +16,12 @@ const messageRoutes = require("./routes/messages");
 const clientRoutes = require("./routes/clients");
 const statusRoutes = require("./routes/statuses");
 const templateRoutes = require("./routes/templates");
-const scheduledMessagesRoutes = require("./routes/scheduledMEssages"); // <-- confirm filename casing!
+const scheduledMessagesRoutes = require("./routes/scheduledMessages"); // ✅ FIXED CASING
 const twilioRoutes = require("./routes/twilio");
 const sheetsWebhookRoutes = require("./routes/sheetsWebhook");
-const internalRoutes = require("./routes/internal"); // ✅ NEW
+const internalRoutes = require("./routes/internal");
+
+// Scheduler
 const { startScheduler } = require("./lib/scheduler");
 
 // DB
@@ -44,7 +46,7 @@ const allowedOrigins = [
 
 app.use(
   cors({
-    origin: function (origin, callback) {
+    origin(origin, callback) {
       if (!origin) return callback(null, true);
       if (allowedOrigins.includes(origin)) return callback(null, true);
       return callback(new Error("CORS blocked origin: " + origin));
@@ -55,7 +57,6 @@ app.use(
   })
 );
 
-// Preflight
 app.options(/.*/, cors());
 
 // -------------------- BODY PARSERS --------------------
@@ -92,7 +93,6 @@ function ensureClientColumns() {
       });
     };
 
-    // fields we want from Google Sheets
     addCol("status_text", "TEXT");
     addCol("case_group", "TEXT");
     addCol("appt_setter", "TEXT");
@@ -104,18 +104,18 @@ ensureClientColumns();
 // -------------------- API ROUTES --------------------
 app.use("/api/auth", authRoutes);
 
-// 🔐 PROTECTED (React users)
+// 🔐 Protected
 app.use("/api/messages", requireAuth, messageRoutes);
 app.use("/api/clients", requireAuth, clientRoutes);
 app.use("/api/statuses", requireAuth, statusRoutes);
 app.use("/api/templates", requireAuth, templateRoutes);
 app.use("/api/scheduled_messages", requireAuth, scheduledMessagesRoutes);
 
-// 🌐 PUBLIC WEBHOOKS (Twilio + Sheets)
+// 🌐 Webhooks
 app.use("/api/twilio", twilioRoutes);
 app.use("/api/sheets", sheetsWebhookRoutes);
 
-// 🤖 INTERNAL MACHINE ROUTES (Apps Script) — x-api-key ONLY
+// 🤖 Internal
 app.use("/api/internal", internalRoutes);
 
 // -------------------- HOME --------------------
@@ -123,17 +123,16 @@ app.get("/", (req, res) => {
   res.send("Castle Consulting Messaging API is running!");
 });
 
-// -------------------- SOCKET.IO EVENTS --------------------
+// -------------------- SOCKET EVENTS --------------------
 io.on("connection", (socket) => {
-  console.log("Socket.IO user connected:", socket.id);
+  console.log("🔌 Socket connected:", socket.id);
 });
 
 // -------------------- START SERVER --------------------
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
+
+  // ✅ THIS IS WHAT YOU WERE MISSING
+  startScheduler(io);
 });
-
-
-
-
