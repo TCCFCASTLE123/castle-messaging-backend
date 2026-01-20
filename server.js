@@ -20,6 +20,7 @@ const scheduledMessagesRoutes = require("./routes/scheduledMEssages"); // <-- co
 const twilioRoutes = require("./routes/twilio");
 const sheetsWebhookRoutes = require("./routes/sheetsWebhook");
 const internalRoutes = require("./routes/internal"); // ✅ NEW
+const { startScheduler } = require("./lib/scheduler");
 
 // DB
 const db = require("./db");
@@ -132,6 +133,7 @@ const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 
 
