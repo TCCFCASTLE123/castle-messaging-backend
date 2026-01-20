@@ -143,6 +143,8 @@ db.run(`
     addCol("appt_setter", "TEXT");
     addCol("ic", "TEXT");
     addCol("case_subtype", "TEXT");
+    addCol("attorney_assigned", "TEXT");
+
   });
 
   // ✅ scheduled_messages: safe add columns if missing
@@ -183,4 +185,5 @@ db.run(`
 });
 
 module.exports = db;
+
 
