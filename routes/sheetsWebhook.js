@@ -26,8 +26,7 @@ const ALLOWED_CODES = new Set([
 function cleanCode(v) {
   const s = (v || "").toString().trim();
   if (!s) return null;
-  // if it matches your allowed set, keep it; otherwise still allow saving raw text
-  // (prevents “blank IC” if sheet has a slightly different value)
+  // If it matches your allowed set, keep it; otherwise still allow saving raw text
   return ALLOWED_CODES.has(s) ? s : s;
 }
 
@@ -105,6 +104,18 @@ router.post("/update", requireKey, async (req, res) => {
 
     const notes = String(pick(row, "notes", "NOTES")).trim();
 
+    // ✅ NEW: Assigned Attorney from Apps Script / sheet
+    const attorney_assigned =
+      String(
+        pick(
+          row,
+          "attorney_assigned",
+          "ATTORNEY_ASSIGNED",
+          "ASSIGNED ATTORNEY",
+          "ATTORNEY ASSIGNED"
+        )
+      ).trim() || null;
+
     if (!phone || phone.length !== 10) {
       return res.status(400).json({ ok: false, error: "Missing/invalid phone" });
     }
@@ -125,10 +136,11 @@ router.post("/update", requireKey, async (req, res) => {
           appt_date, appt_time, appointment_datetime,
           status_id, status_text,
           case_group, appt_setter,
-          ic, intake_coordinator
+          ic, intake_coordinator,
+          attorney_assigned
         )
       VALUES
-        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(phone) DO UPDATE SET
         name = excluded.name,
         email = excluded.email,
@@ -150,7 +162,10 @@ router.post("/update", requireKey, async (req, res) => {
         appt_setter = excluded.appt_setter,
 
         ic = excluded.ic,
-        intake_coordinator = excluded.intake_coordinator
+        intake_coordinator = excluded.intake_coordinator,
+
+        -- ✅ do NOT wipe attorney if sheet sends blank/null
+        attorney_assigned = COALESCE(excluded.attorney_assigned, clients.attorney_assigned)
     `;
 
     db.run(
@@ -178,6 +193,8 @@ router.post("/update", requireKey, async (req, res) => {
 
         ic,
         intake_coordinator,
+
+        attorney_assigned,
       ],
       function (err) {
         if (err) {
@@ -209,6 +226,8 @@ router.post("/update", requireKey, async (req, res) => {
             ic,
             intake_coordinator,
 
+            attorney_assigned, // ✅ NEW
+
             notes: notes || null,
           });
         }
@@ -223,8 +242,9 @@ router.post("/update", requireKey, async (req, res) => {
             appt_date,
             appt_time,
             ic,
-            intake_coordinator
-          }
+            intake_coordinator,
+            attorney_assigned, // ✅ NEW
+          },
         });
       }
     );
