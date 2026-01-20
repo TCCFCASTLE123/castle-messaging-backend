@@ -35,6 +35,7 @@ db.serialize(() => {
     "Seen Can't Help",
     "Did Not Retain",
     "Referred Out",
+    "No Longer Needs Assistance", // ✅ add if you plan to use it
   ];
 
   statuses.forEach((s) => {
@@ -73,6 +74,41 @@ db.serialize(() => {
     )
   `);
 
+  // ✅ Scheduled messages queue (used for automated follow-ups)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS scheduled_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_id INTEGER NOT NULL,
+      send_time TEXT NOT NULL,
+      message TEXT NOT NULL,
+
+      status TEXT NOT NULL DEFAULT 'pending',  -- pending | sending | sent | failed | canceled
+      sent_at TEXT,
+      error TEXT,
+
+      template_key TEXT,
+      rule_key TEXT,
+      step INTEGER,
+      meta TEXT,
+
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+
+      FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+    )
+  `);
+
+  // ✅ indexes (safe even if already exist)
+  db.run(`
+    CREATE INDEX IF NOT EXISTS idx_sched_client_time
+  ON scheduled_messages(client_id, send_time)
+  `);
+
+  db.run(`
+    CREATE INDEX IF NOT EXISTS idx_sched_status_time
+  ON scheduled_messages(status, send_time)
+  `);
+
   // ✅ Safe “add column if missing” for older DBs (Render disk keeps old schema)
   db.all("PRAGMA table_info(clients)", (err, rows) => {
     if (err || !rows) return;
@@ -88,6 +124,35 @@ db.serialize(() => {
 
     addCol("last_message_at", "TEXT");
     addCol("last_message_text", "TEXT");
+    addCol("appt_date", "TEXT");
+    addCol("appt_time", "TEXT");
+    addCol("appt_setter", "TEXT");
+    addCol("ic", "TEXT");
+    addCol("case_subtype", "TEXT");
+  });
+
+  // ✅ scheduled_messages: safe add columns if missing
+  db.all("PRAGMA table_info(scheduled_messages)", (err, rows) => {
+    if (err || !rows) return;
+
+    const names = new Set(rows.map((r) => r.name));
+    const addCol = (name, type) => {
+      if (names.has(name)) return;
+      db.run(`ALTER TABLE scheduled_messages ADD COLUMN ${name} ${type}`, (e) => {
+        if (e) console.error(`❌ ALTER scheduled_messages add ${name} failed:`, e.message);
+        else console.log(`✅ Added scheduled_messages.${name}`);
+      });
+    };
+
+    addCol("status", "TEXT NOT NULL DEFAULT 'pending'");
+    addCol("sent_at", "TEXT");
+    addCol("error", "TEXT");
+    addCol("template_key", "TEXT");
+    addCol("rule_key", "TEXT");
+    addCol("step", "INTEGER");
+    addCol("meta", "TEXT");
+    addCol("created_at", "TEXT NOT NULL DEFAULT (datetime('now'))");
+    addCol("updated_at", "TEXT NOT NULL DEFAULT (datetime('now'))");
   });
 
   db.all("PRAGMA table_info(clients)", (err, rows) => {
@@ -96,6 +161,10 @@ db.serialize(() => {
 
   db.all("PRAGMA table_info(messages)", (err, rows) => {
     if (!err && rows) console.log("📦 messages columns:", rows.map((r) => r.name).join(", "));
+  });
+
+  db.all("PRAGMA table_info(scheduled_messages)", (err, rows) => {
+    if (!err && rows) console.log("📦 scheduled_messages columns:", rows.map((r) => r.name).join(", "));
   });
 });
 
