@@ -35,27 +35,31 @@ db.serialize(() => {
     "Seen Can't Help",
     "Did Not Retain",
     "Referred Out",
-    "No Longer Needs Assistance", // ✅ add if you plan to use it
+    "No Longer Needs Assistance",
   ];
 
   statuses.forEach((s) => {
     db.run(`INSERT OR IGNORE INTO statuses (name) VALUES (?)`, [s]);
   });
-db.run(`
-  CREATE TABLE IF NOT EXISTS templates (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    status TEXT,
-    office TEXT,
-    case_type TEXT,
-    appointment_type TEXT,
-    language TEXT,
-    delay_hours INTEGER DEFAULT 0,
-    template TEXT NOT NULL,
-    active INTEGER DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  )
-`);
 
+  // ✅ Templates (rules/steps)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      status TEXT,
+      office TEXT,
+      case_type TEXT,
+      appointment_type TEXT,
+      language TEXT,
+      delay_hours INTEGER DEFAULT 0,
+      template TEXT NOT NULL,
+      active INTEGER DEFAULT 1,
+      attorney_assigned TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
+  // ✅ Clients
   db.run(`
     CREATE TABLE IF NOT EXISTS clients (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,6 +79,7 @@ db.run(`
     )
   `);
 
+  // ✅ Messages
   db.run(`
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,9 +102,12 @@ db.run(`
       message TEXT NOT NULL,
 
       status TEXT NOT NULL DEFAULT 'pending',  -- pending | sending | sent | failed | canceled
+      attempts INTEGER NOT NULL DEFAULT 0,
       sent_at TEXT,
       error TEXT,
+      last_error TEXT,
 
+      template_id INTEGER,
       template_key TEXT,
       rule_key TEXT,
       step INTEGER,
@@ -115,12 +123,18 @@ db.run(`
   // ✅ indexes (safe even if already exist)
   db.run(`
     CREATE INDEX IF NOT EXISTS idx_sched_client_time
-  ON scheduled_messages(client_id, send_time)
+    ON scheduled_messages(client_id, send_time)
   `);
 
   db.run(`
     CREATE INDEX IF NOT EXISTS idx_sched_status_time
-  ON scheduled_messages(status, send_time)
+    ON scheduled_messages(status, send_time)
+  `);
+
+  // Prevent duplicate scheduling for same client+template+time
+  db.run(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sched_unique_client_template_time
+    ON scheduled_messages(client_id, template_id, send_time)
   `);
 
   // ✅ Safe “add column if missing” for older DBs (Render disk keeps old schema)
@@ -138,13 +152,33 @@ db.run(`
 
     addCol("last_message_at", "TEXT");
     addCol("last_message_text", "TEXT");
+
     addCol("appt_date", "TEXT");
     addCol("appt_time", "TEXT");
     addCol("appt_setter", "TEXT");
-    addCol("ic", "TEXT");
-    addCol("case_subtype", "TEXT");
-    addCol("attorney_assigned", "TEXT");
 
+    addCol("ic", "TEXT");
+    addCol("intake_coordinator", "TEXT"); // ✅ you use this in webhook
+    addCol("case_group", "TEXT");         // ✅ webhook sends case_group
+    addCol("case_subtype", "TEXT");
+
+    addCol("attorney_assigned", "TEXT");
+  });
+
+  // ✅ templates: safe add columns if missing
+  db.all("PRAGMA table_info(templates)", (err, rows) => {
+    if (err || !rows) return;
+
+    const names = new Set(rows.map((r) => r.name));
+    const addCol = (name, type) => {
+      if (names.has(name)) return;
+      db.run(`ALTER TABLE templates ADD COLUMN ${name} ${type}`, (e) => {
+        if (e) console.error(`❌ ALTER templates add ${name} failed:`, e.message);
+        else console.log(`✅ Added templates.${name}`);
+      });
+    };
+
+    addCol("attorney_assigned", "TEXT");
   });
 
   // ✅ scheduled_messages: safe add columns if missing
@@ -161,16 +195,22 @@ db.run(`
     };
 
     addCol("status", "TEXT NOT NULL DEFAULT 'pending'");
+    addCol("attempts", "INTEGER NOT NULL DEFAULT 0");
     addCol("sent_at", "TEXT");
     addCol("error", "TEXT");
+    addCol("last_error", "TEXT");
+
+    addCol("template_id", "INTEGER");
     addCol("template_key", "TEXT");
     addCol("rule_key", "TEXT");
     addCol("step", "INTEGER");
     addCol("meta", "TEXT");
+
     addCol("created_at", "TEXT NOT NULL DEFAULT (datetime('now'))");
     addCol("updated_at", "TEXT NOT NULL DEFAULT (datetime('now'))");
   });
 
+  // Debug schema
   db.all("PRAGMA table_info(clients)", (err, rows) => {
     if (!err && rows) console.log("📦 clients columns:", rows.map((r) => r.name).join(", "));
   });
@@ -179,11 +219,13 @@ db.run(`
     if (!err && rows) console.log("📦 messages columns:", rows.map((r) => r.name).join(", "));
   });
 
+  db.all("PRAGMA table_info(templates)", (err, rows) => {
+    if (!err && rows) console.log("📦 templates columns:", rows.map((r) => r.name).join(", "));
+  });
+
   db.all("PRAGMA table_info(scheduled_messages)", (err, rows) => {
     if (!err && rows) console.log("📦 scheduled_messages columns:", rows.map((r) => r.name).join(", "));
   });
 });
 
 module.exports = db;
-
-
