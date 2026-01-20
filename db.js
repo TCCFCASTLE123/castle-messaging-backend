@@ -41,6 +41,20 @@ db.serialize(() => {
   statuses.forEach((s) => {
     db.run(`INSERT OR IGNORE INTO statuses (name) VALUES (?)`, [s]);
   });
+db.run(`
+  CREATE TABLE IF NOT EXISTS templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT,
+    office TEXT,
+    case_type TEXT,
+    appointment_type TEXT,
+    language TEXT,
+    delay_hours INTEGER DEFAULT 0,
+    template TEXT NOT NULL,
+    active INTEGER DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
 
   db.run(`
     CREATE TABLE IF NOT EXISTS clients (
@@ -169,3 +183,4 @@ db.serialize(() => {
 });
 
 module.exports = db;
+
