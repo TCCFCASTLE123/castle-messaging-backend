@@ -14,7 +14,7 @@ function canonicalPhone(input) {
 // Treat "" as "not provided" for PATCH so we don't wipe existing values.
 function cleanPatchValue(v) {
   if (v === undefined) return undefined; // not provided
-  if (v === "") return undefined;        // ignore blank strings
+  if (v === "") return undefined; // ignore blank strings
   return v;
 }
 
@@ -73,6 +73,7 @@ router.post("/", (req, res) => {
       case_subtype,
       appt_setter,
       ic,
+      attorney_assigned, // ✅ NEW
       intake_coordinator,
       appt_date,
       appt_time,
@@ -107,10 +108,10 @@ router.post("/", (req, res) => {
           (
             name, phone, email, notes, language, office,
             case_type, case_subtype,
-            appt_setter, ic, intake_coordinator,
+            appt_setter, ic, attorney_assigned, intake_coordinator,
             appt_date, appt_time
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           cleanName,
@@ -123,6 +124,7 @@ router.post("/", (req, res) => {
           case_subtype || null,
           appt_setter || null,
           ic || null,
+          attorney_assigned || null, // ✅ NEW
           intake_coordinator || null,
           appt_date || null,
           appt_time || null,
@@ -178,8 +180,8 @@ router.patch("/:id", (req, res) => {
       const phoneVal = cleanPatchValue(body.phone);
 
       const merged = {
-        name: nameVal !== undefined ? String(nameVal).trim() : (existing.name || ""),
-        phone: phoneVal !== undefined ? canonicalPhone(phoneVal) : (existing.phone || ""),
+        name: nameVal !== undefined ? String(nameVal).trim() : existing.name || "",
+        phone: phoneVal !== undefined ? canonicalPhone(phoneVal) : existing.phone || "",
 
         email: cleanPatchValue(body.email) !== undefined ? body.email : existing.email,
         notes: cleanPatchValue(body.notes) !== undefined ? body.notes : existing.notes,
@@ -191,6 +193,13 @@ router.patch("/:id", (req, res) => {
 
         appt_setter: cleanPatchValue(body.appt_setter) !== undefined ? body.appt_setter : existing.appt_setter,
         ic: cleanPatchValue(body.ic) !== undefined ? body.ic : existing.ic,
+
+        // ✅ NEW
+        attorney_assigned:
+          cleanPatchValue(body.attorney_assigned) !== undefined
+            ? body.attorney_assigned
+            : existing.attorney_assigned,
+
         intake_coordinator:
           cleanPatchValue(body.intake_coordinator) !== undefined
             ? body.intake_coordinator
@@ -209,64 +218,61 @@ router.patch("/:id", (req, res) => {
         return res.status(400).json({ error: "Phone must be 10 digits" });
       }
 
-      db.get(
-        "SELECT id FROM clients WHERE phone = ? AND id != ?",
-        [merged.phone, id],
-        (dErr, dup) => {
-          if (dErr) {
-            clear();
-            console.error(dErr);
-            return res.status(500).json({ error: "Duplicate check failed" });
-          }
-          if (dup) {
-            clear();
-            return res.status(409).json({ error: "Phone already exists" });
-          }
-
-          db.run(
-            `
-              UPDATE clients SET
-                name = ?, phone = ?, email = ?, notes = ?, language = ?, office = ?,
-                case_type = ?, case_subtype = ?,
-                appt_setter = ?, ic = ?, intake_coordinator = ?,
-                appt_date = ?, appt_time = ?
-              WHERE id = ?
-            `,
-            [
-              merged.name,
-              merged.phone,
-              merged.email,
-              merged.notes,
-              merged.language,
-              merged.office,
-              merged.case_type,
-              merged.case_subtype,
-              merged.appt_setter,
-              merged.ic,
-              merged.intake_coordinator,
-              merged.appt_date,
-              merged.appt_time,
-              id,
-            ],
-            (uErr) => {
-              if (uErr) {
-                clear();
-                console.error(uErr);
-                return res.status(500).json({ error: "Update failed" });
-              }
-
-              db.get("SELECT * FROM clients WHERE id = ?", [id], (fErr, row2) => {
-                clear();
-                if (fErr) {
-                  console.error(fErr);
-                  return res.status(500).json({ error: "Fetch failed" });
-                }
-                return res.json(row2);
-              });
-            }
-          );
+      db.get("SELECT id FROM clients WHERE phone = ? AND id != ?", [merged.phone, id], (dErr, dup) => {
+        if (dErr) {
+          clear();
+          console.error(dErr);
+          return res.status(500).json({ error: "Duplicate check failed" });
         }
-      );
+        if (dup) {
+          clear();
+          return res.status(409).json({ error: "Phone already exists" });
+        }
+
+        db.run(
+          `
+            UPDATE clients SET
+              name = ?, phone = ?, email = ?, notes = ?, language = ?, office = ?,
+              case_type = ?, case_subtype = ?,
+              appt_setter = ?, ic = ?, attorney_assigned = ?, intake_coordinator = ?,
+              appt_date = ?, appt_time = ?
+            WHERE id = ?
+          `,
+          [
+            merged.name,
+            merged.phone,
+            merged.email,
+            merged.notes,
+            merged.language,
+            merged.office,
+            merged.case_type,
+            merged.case_subtype,
+            merged.appt_setter,
+            merged.ic,
+            merged.attorney_assigned, // ✅ NEW
+            merged.intake_coordinator,
+            merged.appt_date,
+            merged.appt_time,
+            id,
+          ],
+          (uErr) => {
+            if (uErr) {
+              clear();
+              console.error(uErr);
+              return res.status(500).json({ error: "Update failed" });
+            }
+
+            db.get("SELECT * FROM clients WHERE id = ?", [id], (fErr, row2) => {
+              clear();
+              if (fErr) {
+                console.error(fErr);
+                return res.status(500).json({ error: "Fetch failed" });
+              }
+              return res.json(row2);
+            });
+          }
+        );
+      });
     });
   } catch (e) {
     clear();
@@ -282,18 +288,14 @@ router.put("/:id/status", (req, res) => {
   const clear = withTimeout(res, "PUT /api/clients/:id/status");
   const { status_id } = req.body || {};
 
-  db.run(
-    "UPDATE clients SET status_id = ? WHERE id = ?",
-    [status_id || null, req.params.id],
-    (err) => {
-      clear();
-      if (err) {
-        console.error(err);
-        return res.status(500).json({ success: false });
-      }
-      return res.json({ success: true });
+  db.run("UPDATE clients SET status_id = ? WHERE id = ?", [status_id || null, req.params.id], (err) => {
+    clear();
+    if (err) {
+      console.error(err);
+      return res.status(500).json({ success: false });
     }
-  );
+    return res.json({ success: true });
+  });
 });
 
 /**
