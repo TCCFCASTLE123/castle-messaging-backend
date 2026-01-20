@@ -11,7 +11,7 @@ router.get('/', (req, res) => {
 });
 
 // === Add new template ===
-router.post('/', (req, res) => {
+router.post("/", (req, res) => {
   const { status, office, case_type, appointment_type, language, delay_hours, template, active } = req.body;
   if (!template) return res.status(400).json({ error: "Template message required" });
 
@@ -24,12 +24,15 @@ router.post('/', (req, res) => {
       case_type || "",
       appointment_type || "",
       language || "",
-      delay_hours || 0,
+      Number(delay_hours || 0),
       template,
-      active ? 1 : 0
+      active ? 1 : 0,
     ],
     function (err) {
-      if (err) return res.status(500).json({ error: "Failed to add template" });
+      if (err) {
+        console.error("❌ TEMPLATE INSERT ERROR:", err);
+        return res.status(500).json({ error: err.message }); // 👈 IMPORTANT
+      }
       res.json({ id: this.lastID, ...req.body });
     }
   );
@@ -86,3 +89,4 @@ router.get('/:id', (req, res) => {
 });
 
 module.exports = router;
+
