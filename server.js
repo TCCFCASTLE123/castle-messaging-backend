@@ -16,7 +16,7 @@ const messageRoutes = require("./routes/messages");
 const clientRoutes = require("./routes/clients");
 const statusRoutes = require("./routes/statuses");
 const templateRoutes = require("./routes/templates");
-const scheduledMessagesRoutes = require("./routes/scheduledMessages"); // ✅ FIXED CASING
+const scheduledMEssagesRoutes = require("./routes/scheduledMEssages"); // ✅ FIXED CASING
 const twilioRoutes = require("./routes/twilio");
 const sheetsWebhookRoutes = require("./routes/sheetsWebhook");
 const internalRoutes = require("./routes/internal");
@@ -109,7 +109,7 @@ app.use("/api/messages", requireAuth, messageRoutes);
 app.use("/api/clients", requireAuth, clientRoutes);
 app.use("/api/statuses", requireAuth, statusRoutes);
 app.use("/api/templates", requireAuth, templateRoutes);
-app.use("/api/scheduled_messages", requireAuth, scheduledMessagesRoutes);
+app.use("/api/scheduled_messages", requireAuth, scheduledMEssagesRoutes);
 
 // 🌐 Webhooks
 app.use("/api/twilio", twilioRoutes);
@@ -136,3 +136,4 @@ server.listen(PORT, () => {
   // ✅ THIS IS WHAT YOU WERE MISSING
   startScheduler(io);
 });
+
