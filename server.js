@@ -128,12 +128,11 @@ io.on("connection", (socket) => {
   console.log("🔌 Socket connected:", socket.id);
 });
 
-// -------------------- START SERVER --------------------
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-
-  // ✅ THIS IS WHAT YOU WERE MISSING
-  startScheduler(io);
+  console.log(`Server running on port ${PORT}`);
+  startScheduler(io); // ✅ START IT
 });
+
+
 
