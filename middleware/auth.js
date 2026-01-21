@@ -21,6 +21,9 @@ module.exports = function authMiddleware(req, res, next) {
   if (!token) {
     return res.status(401).json({ message: "Missing auth token" });
   }
+if (!user || user.is_active === 0) {
+  return res.status(403).json({ error: "User inactive" });
+}
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -37,3 +40,4 @@ module.exports = function authMiddleware(req, res, next) {
     return res.status(401).json({ message: "Invalid/expired token" });
   }
 };
+
