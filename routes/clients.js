@@ -1,9 +1,11 @@
-// routes/clients.js — CLEAN + SAFE PATCH (does not wipe with blank strings)
+// routes/clients.js — CLEAN + SAFE (templates enqueue on status change)
 
 const express = require("express");
 const router = express.Router();
 const db = require("../db");
 const { enqueueTemplatesForClient } = require("../lib/enqueueTemplates");
+
+// -------------------- HELPERS --------------------
 
 function canonicalPhone(input) {
   if (!input) return "";
@@ -14,12 +16,12 @@ function canonicalPhone(input) {
 
 // Treat "" as "not provided" for PATCH so we don't wipe existing values.
 function cleanPatchValue(v) {
-  if (v === undefined) return undefined; // not provided
-  if (v === "") return undefined; // ignore blank strings
+  if (v === undefined) return undefined;
+  if (v === "") return undefined;
   return v;
 }
 
-// Optional: prevents "pending forever" if sqlite is locked
+// Optional timeout guard
 function withTimeout(res, label, ms = 12000) {
   const t = setTimeout(() => {
     console.error(`❌ ${label} timed out after ${ms}ms`);
@@ -28,21 +30,20 @@ function withTimeout(res, label, ms = 12000) {
   return () => clearTimeout(t);
 }
 
-/**
- * GET /api/clients
- */
+// -------------------- GET ALL CLIENTS --------------------
+
 router.get("/", (req, res) => {
   const clear = withTimeout(res, "GET /api/clients");
 
   db.all(
     `
-      SELECT c.*, s.name AS status_name
-      FROM clients c
-      LEFT JOIN statuses s ON c.status_id = s.id
-      ORDER BY
-        CASE WHEN c.last_message_at IS NULL OR c.last_message_at = '' THEN 1 ELSE 0 END,
-        datetime(c.last_message_at) DESC,
-        c.id DESC
+    SELECT c.*, s.name AS status
+    FROM clients c
+    LEFT JOIN statuses s ON s.id = c.status_id
+    ORDER BY
+      CASE WHEN c.last_message_at IS NULL OR c.last_message_at = '' THEN 1 ELSE 0 END,
+      datetime(c.last_message_at) DESC,
+      c.id DESC
     `,
     [],
     (err, rows) => {
@@ -51,271 +52,268 @@ router.get("/", (req, res) => {
         console.error("❌ GET clients failed:", err);
         return res.status(500).json({ error: "Failed to load clients" });
       }
-      return res.json(rows || []);
+      res.json(rows || []);
     }
   );
 });
 
-/**
- * POST /api/clients
- */
+// -------------------- CREATE CLIENT --------------------
+
 router.post("/", (req, res) => {
   const clear = withTimeout(res, "POST /api/clients");
 
-  try {
-    const {
-      name,
-      phone,
-      email,
-      notes,
-      language,
-      office,
-      case_type,
-      case_subtype,
-      appt_setter,
-      ic,
-      attorney_assigned, // ✅ NEW
-      intake_coordinator,
-      appt_date,
-      appt_time,
-    } = req.body || {};
+  const {
+    name,
+    phone,
+    email,
+    notes,
+    language,
+    office,
+    case_type,
+    case_subtype,
+    appt_setter,
+    ic,
+    attorney_assigned,
+    intake_coordinator,
+    appt_date,
+    appt_time,
+  } = req.body || {};
 
-    const cleanName = (name || "").trim();
-    const cleanPhone = canonicalPhone(phone);
+  const cleanName = (name || "").trim();
+  const cleanPhone = canonicalPhone(phone);
 
-    if (!cleanName) {
-      clear();
-      return res.status(400).json({ error: "Name is required" });
-    }
-    if (!cleanPhone || cleanPhone.length !== 10) {
-      clear();
-      return res.status(400).json({ error: "Phone number is required (10 digits)" });
-    }
-
-    db.get("SELECT id FROM clients WHERE phone = ?", [cleanPhone], (err, row) => {
-      if (err) {
-        clear();
-        console.error(err);
-        return res.status(500).json({ error: "Lookup failed" });
-      }
-      if (row) {
-        clear();
-        return res.status(409).json({ error: "That phone number already exists." });
-      }
-
-      db.run(
-        `
-          INSERT INTO clients
-          (
-            name, phone, email, notes, language, office,
-            case_type, case_subtype,
-            appt_setter, ic, attorney_assigned, intake_coordinator,
-            appt_date, appt_time
-          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-        [
-          cleanName,
-          cleanPhone,
-          email || null,
-          notes || null,
-          language || "English",
-          office || null,
-          case_type || null,
-          case_subtype || null,
-          appt_setter || null,
-          ic || null,
-          attorney_assigned || null, // ✅ NEW
-          intake_coordinator || null,
-          appt_date || null,
-          appt_time || null,
-        ],
-        function (insertErr) {
-          if (insertErr) {
-            clear();
-            console.error(insertErr);
-            return res.status(500).json({ error: "Insert failed" });
-          }
-
-          db.get("SELECT * FROM clients WHERE id = ?", [this.lastID], (gErr, row2) => {
-            clear();
-            if (gErr) {
-              console.error(gErr);
-              return res.status(500).json({ error: "Fetch failed" });
-            }
-            return res.json(row2);
-          });
-        }
-      );
-    });
-  } catch (e) {
+  if (!cleanName) {
     clear();
-    console.error(e);
-    return res.status(500).json({ error: "Server error" });
+    return res.status(400).json({ error: "Name is required" });
   }
+  if (!cleanPhone || cleanPhone.length !== 10) {
+    clear();
+    return res.status(400).json({ error: "Phone must be 10 digits" });
+  }
+
+  db.get("SELECT id FROM clients WHERE phone = ?", [cleanPhone], (err, row) => {
+    if (err) {
+      clear();
+      return res.status(500).json({ error: "Lookup failed" });
+    }
+    if (row) {
+      clear();
+      return res.status(409).json({ error: "Phone already exists" });
+    }
+
+    db.run(
+      `
+      INSERT INTO clients
+      (
+        name, phone, email, notes, language, office,
+        case_type, case_subtype,
+        appt_setter, ic, attorney_assigned, intake_coordinator,
+        appt_date, appt_time
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        cleanName,
+        cleanPhone,
+        email || null,
+        notes || null,
+        language || "English",
+        office || null,
+        case_type || null,
+        case_subtype || null,
+        appt_setter || null,
+        ic || null,
+        attorney_assigned || null,
+        intake_coordinator || null,
+        appt_date || null,
+        appt_time || null,
+      ],
+      function (err2) {
+        clear();
+        if (err2) {
+          console.error(err2);
+          return res.status(500).json({ error: "Insert failed" });
+        }
+
+        db.get("SELECT * FROM clients WHERE id = ?", [this.lastID], (e2, row2) => {
+          if (e2) return res.status(500).json({ error: "Fetch failed" });
+          res.json(row2);
+        });
+      }
+    );
+  });
 });
 
-/**
- * PATCH /api/clients/:id
- * ✅ does NOT overwrite existing values with "" (blank strings)
- */
+// -------------------- PATCH CLIENT --------------------
+
 router.patch("/:id", (req, res) => {
   const clear = withTimeout(res, "PATCH /api/clients/:id");
   const id = req.params.id;
 
-  try {
-    db.get("SELECT * FROM clients WHERE id = ?", [id], (err, existing) => {
-      if (err) {
+  db.get("SELECT * FROM clients WHERE id = ?", [id], (err, existing) => {
+    if (err || !existing) {
+      clear();
+      return res.status(404).json({ error: "Client not found" });
+    }
+
+    const body = req.body || {};
+
+    const merged = {
+      name: cleanPatchValue(body.name) ?? existing.name,
+      phone:
+        cleanPatchValue(body.phone) !== undefined
+          ? canonicalPhone(body.phone)
+          : existing.phone,
+      email: cleanPatchValue(body.email) ?? existing.email,
+      notes: cleanPatchValue(body.notes) ?? existing.notes,
+      language: cleanPatchValue(body.language) ?? existing.language,
+      office: cleanPatchValue(body.office) ?? existing.office,
+      case_type: cleanPatchValue(body.case_type) ?? existing.case_type,
+      case_subtype: cleanPatchValue(body.case_subtype) ?? existing.case_subtype,
+      appt_setter: cleanPatchValue(body.appt_setter) ?? existing.appt_setter,
+      ic: cleanPatchValue(body.ic) ?? existing.ic,
+      attorney_assigned:
+        cleanPatchValue(body.attorney_assigned) ?? existing.attorney_assigned,
+      intake_coordinator:
+        cleanPatchValue(body.intake_coordinator) ??
+        existing.intake_coordinator,
+      appt_date: cleanPatchValue(body.appt_date) ?? existing.appt_date,
+      appt_time: cleanPatchValue(body.appt_time) ?? existing.appt_time,
+    };
+
+    if (!merged.name || merged.phone.length !== 10) {
+      clear();
+      return res.status(400).json({ error: "Invalid name or phone" });
+    }
+
+    db.run(
+      `
+      UPDATE clients SET
+        name=?, phone=?, email=?, notes=?, language=?, office=?,
+        case_type=?, case_subtype=?,
+        appt_setter=?, ic=?, attorney_assigned=?, intake_coordinator=?,
+        appt_date=?, appt_time=?
+      WHERE id=?
+      `,
+      [
+        merged.name,
+        merged.phone,
+        merged.email,
+        merged.notes,
+        merged.language,
+        merged.office,
+        merged.case_type,
+        merged.case_subtype,
+        merged.appt_setter,
+        merged.ic,
+        merged.attorney_assigned,
+        merged.intake_coordinator,
+        merged.appt_date,
+        merged.appt_time,
+        id,
+      ],
+      (uErr) => {
         clear();
-        console.error(err);
-        return res.status(500).json({ error: "Load failed" });
+        if (uErr) return res.status(500).json({ error: "Update failed" });
+
+        db.get("SELECT * FROM clients WHERE id = ?", [id], (fErr, row2) => {
+          if (fErr) return res.status(500).json({ error: "Fetch failed" });
+          res.json(row2);
+        });
       }
-      if (!existing) {
+    );
+  });
+});
+
+// ===================================================================
+// 🔥 PUT /api/clients/:id/status
+// 🔥 Triggers template enqueue on REAL status change
+// ===================================================================
+
+router.put("/:id/status", (req, res) => {
+  const clear = withTimeout(res, "PUT /api/clients/:id/status");
+  const clientId = req.params.id;
+  const { status_id } = req.body || {};
+
+  if (!status_id) {
+    clear();
+    return res.status(400).json({ error: "status_id required" });
+  }
+
+  // Load old status
+  db.get(
+    `
+    SELECT c.*, s.name AS status_name
+    FROM clients c
+    LEFT JOIN statuses s ON s.id = c.status_id
+    WHERE c.id = ?
+    `,
+    [clientId],
+    (err, oldClient) => {
+      if (err || !oldClient) {
         clear();
         return res.status(404).json({ error: "Client not found" });
       }
 
-      const body = req.body || {};
+      const oldStatus = oldClient.status_name || "";
 
-      const nameVal = cleanPatchValue(body.name);
-      const phoneVal = cleanPatchValue(body.phone);
-
-      const merged = {
-        name: nameVal !== undefined ? String(nameVal).trim() : existing.name || "",
-        phone: phoneVal !== undefined ? canonicalPhone(phoneVal) : existing.phone || "",
-
-        email: cleanPatchValue(body.email) !== undefined ? body.email : existing.email,
-        notes: cleanPatchValue(body.notes) !== undefined ? body.notes : existing.notes,
-        language: cleanPatchValue(body.language) !== undefined ? body.language : existing.language,
-        office: cleanPatchValue(body.office) !== undefined ? body.office : existing.office,
-
-        case_type: cleanPatchValue(body.case_type) !== undefined ? body.case_type : existing.case_type,
-        case_subtype: cleanPatchValue(body.case_subtype) !== undefined ? body.case_subtype : existing.case_subtype,
-
-        appt_setter: cleanPatchValue(body.appt_setter) !== undefined ? body.appt_setter : existing.appt_setter,
-        ic: cleanPatchValue(body.ic) !== undefined ? body.ic : existing.ic,
-
-        // ✅ NEW
-        attorney_assigned:
-          cleanPatchValue(body.attorney_assigned) !== undefined
-            ? body.attorney_assigned
-            : existing.attorney_assigned,
-
-        intake_coordinator:
-          cleanPatchValue(body.intake_coordinator) !== undefined
-            ? body.intake_coordinator
-            : existing.intake_coordinator,
-
-        appt_date: cleanPatchValue(body.appt_date) !== undefined ? body.appt_date : existing.appt_date,
-        appt_time: cleanPatchValue(body.appt_time) !== undefined ? body.appt_time : existing.appt_time,
-      };
-
-      if (!merged.name || !merged.phone) {
-        clear();
-        return res.status(400).json({ error: "Name and phone required" });
-      }
-      if (merged.phone.length !== 10) {
-        clear();
-        return res.status(400).json({ error: "Phone must be 10 digits" });
-      }
-
-      db.get("SELECT id FROM clients WHERE phone = ? AND id != ?", [merged.phone, id], (dErr, dup) => {
-        if (dErr) {
-          clear();
-          console.error(dErr);
-          return res.status(500).json({ error: "Duplicate check failed" });
-        }
-        if (dup) {
-          clear();
-          return res.status(409).json({ error: "Phone already exists" });
-        }
-
-        db.run(
-          `
-            UPDATE clients SET
-              name = ?, phone = ?, email = ?, notes = ?, language = ?, office = ?,
-              case_type = ?, case_subtype = ?,
-              appt_setter = ?, ic = ?, attorney_assigned = ?, intake_coordinator = ?,
-              appt_date = ?, appt_time = ?
-            WHERE id = ?
-          `,
-          [
-            merged.name,
-            merged.phone,
-            merged.email,
-            merged.notes,
-            merged.language,
-            merged.office,
-            merged.case_type,
-            merged.case_subtype,
-            merged.appt_setter,
-            merged.ic,
-            merged.attorney_assigned, // ✅ NEW
-            merged.intake_coordinator,
-            merged.appt_date,
-            merged.appt_time,
-            id,
-          ],
-          (uErr) => {
-            if (uErr) {
-              clear();
-              console.error(uErr);
-              return res.status(500).json({ error: "Update failed" });
-            }
-
-            db.get("SELECT * FROM clients WHERE id = ?", [id], (fErr, row2) => {
-              clear();
-              if (fErr) {
-                console.error(fErr);
-                return res.status(500).json({ error: "Fetch failed" });
-              }
-              return res.json(row2);
-            });
+      // Update status_id
+      db.run(
+        "UPDATE clients SET status_id = ? WHERE id = ?",
+        [status_id, clientId],
+        (uErr) => {
+          if (uErr) {
+            clear();
+            return res.status(500).json({ error: "Update failed" });
           }
-        );
-      });
-    });
-  } catch (e) {
-    clear();
-    console.error(e);
-    return res.status(500).json({ error: "Server error" });
-  }
-});
 
-/**
- * PUT /api/clients/:id/status
- */
-router.put("/:id/status", (req, res) => {
-  const clear = withTimeout(res, "PUT /api/clients/:id/status");
-  const { status_id } = req.body || {};
+          // Reload client with new status
+          db.get(
+            `
+            SELECT c.*, s.name AS status
+            FROM clients c
+            LEFT JOIN statuses s ON s.id = c.status_id
+            WHERE c.id = ?
+            `,
+            [clientId],
+            async (fErr, updatedClient) => {
+              clear();
+              if (fErr || !updatedClient) {
+                return res.status(500).json({ error: "Reload failed" });
+              }
 
-  db.run("UPDATE clients SET status_id = ? WHERE id = ?", [status_id || null, req.params.id], (err) => {
-    clear();
-    if (err) {
-      console.error(err);
-      return res.status(500).json({ success: false });
+              const newStatus = updatedClient.status || "";
+
+              // 🔥 ACTUAL TRIGGER
+              if (oldStatus !== newStatus) {
+                try {
+                  await enqueueTemplatesForClient(updatedClient);
+                } catch (e) {
+                  console.error("❌ Template enqueue failed:", e.message);
+                }
+              }
+
+              res.json({ success: true, client: updatedClient });
+            }
+          );
+        }
+      );
     }
-    return res.json({ success: true });
-  });
+  );
 });
 
-/**
- * DELETE /api/clients/:id
- */
+// -------------------- DELETE CLIENT --------------------
+
 router.delete("/:id", (req, res) => {
   const clear = withTimeout(res, "DELETE /api/clients/:id");
 
   db.run("DELETE FROM messages WHERE client_id = ?", [req.params.id], () => {
     db.run("DELETE FROM clients WHERE id = ?", [req.params.id], (err) => {
       clear();
-      if (err) {
-        console.error(err);
-        return res.status(500).json({ error: "Delete failed" });
-      }
-      return res.json({ success: true });
+      if (err) return res.status(500).json({ error: "Delete failed" });
+      res.json({ success: true });
     });
   });
 });
 
 module.exports = router;
-
