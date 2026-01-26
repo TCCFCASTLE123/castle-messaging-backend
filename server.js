@@ -1,6 +1,5 @@
 /*******************************************************
  * Castle Consulting Messaging Backend — server.js
- * Node + Express + Socket.io + Twilio + SQLite
  *******************************************************/
 
 require("dotenv").config();
@@ -16,7 +15,7 @@ const messageRoutes = require("./routes/messages");
 const clientRoutes = require("./routes/clients");
 const statusRoutes = require("./routes/statuses");
 const templateRoutes = require("./routes/templates");
-const scheduledMEssagesRoutes = require("./routes/scheduledMEssages"); // ✅ FIXED CASING
+const scheduledMessagesRoutes = require("./routes/scheduledMEssages");
 const twilioRoutes = require("./routes/twilio");
 const sheetsWebhookRoutes = require("./routes/sheetsWebhook");
 const internalRoutes = require("./routes/internal");
@@ -24,10 +23,10 @@ const internalRoutes = require("./routes/internal");
 // Scheduler
 const { startScheduler } = require("./lib/scheduler");
 
-// DB
-const db = require("./db");
+// DB (forces DB + migrations to run)
+require("./db");
 
-// -------------------- APP + SERVER --------------------
+// -------------------- APP --------------------
 const app = express();
 const server = http.createServer(app);
 
@@ -40,7 +39,6 @@ app.use((req, res, next) => {
 // -------------------- CORS --------------------
 const allowedOrigins = [
   "http://localhost:3000",
-  "http://localhost:5000",
   "https://castle-consulting-firm-messaging.onrender.com",
 ];
 
@@ -52,16 +50,10 @@ app.use(
       return callback(new Error("CORS blocked origin: " + origin));
     },
     credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "x-api-key", "x-webhook-key"],
   })
 );
 
-app.options(/.*/, cors());
-
-// -------------------- BODY PARSERS --------------------
 app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
 
 // -------------------- SOCKET.IO --------------------
 const io = new Server(server, {
@@ -72,50 +64,23 @@ const io = new Server(server, {
   },
 });
 
-// Make io available to routes
-app.use((req, res, next) => {
-  req.io = io;
-  next();
+io.on("connection", (socket) => {
+  console.log("🔌 Socket connected:", socket.id);
 });
 
-// -------------------- SAFE AUTO-MIGRATIONS --------------------
-function ensureClientColumns() {
-  db.all("PRAGMA table_info(clients)", [], (err, cols) => {
-    if (err) return console.error("❌ PRAGMA clients failed:", err.message);
+// 🔥🔥🔥 START SCHEDULER HERE — NOT IN server.listen 🔥🔥🔥
+startScheduler(io);
 
-    const names = new Set((cols || []).map((c) => c.name));
-
-    const addCol = (name, type) => {
-      if (names.has(name)) return;
-      db.run(`ALTER TABLE clients ADD COLUMN ${name} ${type}`, [], (e) => {
-        if (e) console.error(`❌ ADD COLUMN clients.${name} failed:`, e.message);
-        else console.log(`✅ Added clients.${name}`);
-      });
-    };
-
-    addCol("status_text", "TEXT");
-    addCol("case_group", "TEXT");
-    addCol("appt_setter", "TEXT");
-    addCol("ic", "TEXT");
-  });
-}
-ensureClientColumns();
-
-// -------------------- API ROUTES --------------------
+// -------------------- ROUTES --------------------
 app.use("/api/auth", authRoutes);
-
-// 🔐 Protected
 app.use("/api/messages", requireAuth, messageRoutes);
 app.use("/api/clients", requireAuth, clientRoutes);
 app.use("/api/statuses", requireAuth, statusRoutes);
 app.use("/api/templates", requireAuth, templateRoutes);
-app.use("/api/scheduled_messages", requireAuth, scheduledMEssagesRoutes);
+app.use("/api/scheduled_messages", requireAuth, scheduledMessagesRoutes);
 
-// 🌐 Webhooks
 app.use("/api/twilio", twilioRoutes);
 app.use("/api/sheets", sheetsWebhookRoutes);
-
-// 🤖 Internal
 app.use("/api/internal", internalRoutes);
 
 // -------------------- HOME --------------------
@@ -123,19 +88,8 @@ app.get("/", (req, res) => {
   res.send("Castle Consulting Messaging API is running!");
 });
 
-// -------------------- SOCKET EVENTS --------------------
-io.on("connection", (socket) => {
-  console.log("🔌 Socket connected:", socket.id);
-});
-
+// -------------------- LISTEN --------------------
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  startScheduler(io); // 🔥 REQUIRED
+  console.log(`🚀 Server listening on port ${PORT}`);
 });
-// ✅ START IT
-
-
-
-
-
