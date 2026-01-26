@@ -23,7 +23,7 @@ const internalRoutes = require("./routes/internal");
 // Scheduler
 const { startScheduler } = require("./lib/scheduler");
 
-// DB (forces DB + migrations to run)
+// DB (forces DB + migrations)
 require("./db");
 
 // -------------------- APP --------------------
@@ -36,7 +36,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// -------------------- CORS (🔥 FIXED 🔥) --------------------
+// -------------------- CORS (🔥 FIXED, NO CRASH 🔥) --------------------
 const allowedOrigins = [
   "http://localhost:3000",
   "https://castle-consulting-firm-messaging.onrender.com",
@@ -45,7 +45,7 @@ const allowedOrigins = [
 app.use(
   cors({
     origin(origin, callback) {
-      // allow server-to-server & same-origin
+      // allow same-origin & server-to-server
       if (!origin) return callback(null, true);
       if (allowedOrigins.includes(origin)) return callback(null, true);
       return callback(new Error("CORS blocked origin: " + origin));
@@ -61,8 +61,9 @@ app.use(
   })
 );
 
-// ✅ REQUIRED for browser preflight
-app.options("*", cors());
+// IMPORTANT:
+// ❌ DO NOT add app.options("*", cors())
+// cors() already handles preflight safely
 
 // -------------------- BODY PARSER --------------------
 app.use(express.json());
