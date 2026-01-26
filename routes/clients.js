@@ -243,14 +243,63 @@ router.put("/:id/status", (req, res) => {
 
 // -------------------- DELETE CLIENT --------------------
 
+// -------------------- DELETE CLIENT (FULL CASCADE) --------------------
+
 router.delete("/:id", (req, res) => {
   const clear = withTimeout(res, "DELETE /api/clients/:id");
+  const clientId = req.params.id;
 
-  db.run("DELETE FROM clients WHERE id = ?", [req.params.id], (err) => {
-    clear();
-    if (err) return res.status(500).json({ error: "Delete failed" });
-    res.json({ success: true });
+  db.serialize(() => {
+    db.run("BEGIN TRANSACTION");
+
+    db.run(
+      "DELETE FROM scheduled_messages WHERE client_id = ?",
+      [clientId],
+      (err) => {
+        if (err) {
+          db.run("ROLLBACK");
+          clear();
+          console.error("❌ Failed deleting scheduled_messages:", err.message);
+          return res.status(500).json({ error: "Failed deleting scheduled messages" });
+        }
+
+        db.run(
+          "DELETE FROM messages WHERE client_id = ?",
+          [clientId],
+          (err2) => {
+            if (err2) {
+              db.run("ROLLBACK");
+              clear();
+              console.error("❌ Failed deleting messages:", err2.message);
+              return res.status(500).json({ error: "Failed deleting messages" });
+            }
+
+            db.run(
+              "DELETE FROM clients WHERE id = ?",
+              [clientId],
+              function (err3) {
+                if (err3) {
+                  db.run("ROLLBACK");
+                  clear();
+                  console.error("❌ Failed deleting client:", err3.message);
+                  return res.status(500).json({ error: "Failed deleting client" });
+                }
+
+                db.run("COMMIT");
+                clear();
+
+                return res.json({
+                  success: true,
+                  deleted_client_id: clientId,
+                });
+              }
+            );
+          }
+        );
+      }
+    );
   });
 });
 
 module.exports = router;
+
