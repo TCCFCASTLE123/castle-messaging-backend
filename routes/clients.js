@@ -4,6 +4,7 @@ const express = require("express");
 const router = express.Router();
 const db = require("../db");
 const { enqueueTemplatesForClient } = require("../lib/enqueueTemplates");
+const oldStatusId = existing.status_id;
 
 // -------------------- HELPERS --------------------
 
@@ -135,11 +136,37 @@ router.post("/", (req, res) => {
           return res.status(500).json({ error: "Insert failed" });
         }
 
-        db.get("SELECT * FROM clients WHERE id = ?", [this.lastID], (e2, row2) => {
-          if (e2) return res.status(500).json({ error: "Fetch failed" });
-          res.json(row2);
-        });
+  db.get(
+  `
+  SELECT c.*, s.name AS status
+  FROM clients c
+  LEFT JOIN statuses s ON s.id = c.status_id
+  WHERE c.id = ?
+  `,
+  [id],
+  async (fErr, updatedClient) => {
+    if (fErr) {
+      clear();
+      return res.status(500).json({ error: "Fetch failed" });
+    }
+
+    // 🔥 TRIGGER TEMPLATES IF STATUS CHANGED
+    if (
+      req.body.status_id &&
+      Number(req.body.status_id) !== Number(oldStatusId)
+    ) {
+      try {
+        await enqueueTemplatesForClient(updatedClient);
+      } catch (e) {
+        console.error("❌ Template enqueue failed:", e.message);
       }
+    }
+
+    clear();
+    res.json(updatedClient);
+  }
+);
+
     );
   });
 });
@@ -317,3 +344,4 @@ router.delete("/:id", (req, res) => {
 });
 
 module.exports = router;
+
