@@ -1,4 +1,4 @@
-// routes/clients.js — FINAL, SAFE, STATUS WORKING + TEMPLATE TRIGGER
+// routes/clients.js — FINAL, SAFE, STATUS ROUTE RESTORED
 
 const express = require("express");
 const router = express.Router();
@@ -22,9 +22,7 @@ function cleanPatchValue(v) {
 function withTimeout(res, label, ms = 12000) {
   const t = setTimeout(() => {
     console.error(`❌ ${label} timed out after ${ms}ms`);
-    if (!res.headersSent) {
-      res.status(504).json({ error: "Request timed out" });
-    }
+    if (!res.headersSent) res.status(504).json({ error: "Request timed out" });
   }, ms);
   return () => clearTimeout(t);
 }
@@ -47,10 +45,7 @@ router.get("/", (req, res) => {
     [],
     (err, rows) => {
       clear();
-      if (err) {
-        console.error(err);
-        return res.status(500).json({ error: "Failed to load clients" });
-      }
+      if (err) return res.status(500).json({ error: "Failed to load clients" });
       res.json(rows || []);
     }
   );
@@ -75,16 +70,13 @@ router.post("/", (req, res) => {
     [cleanName, cleanPhone],
     function (err) {
       clear();
-      if (err) {
-        console.error(err);
-        return res.status(500).json({ error: "Insert failed" });
-      }
+      if (err) return res.status(500).json({ error: "Insert failed" });
       res.json({ id: this.lastID });
     }
   );
 });
 
-// -------------------- PATCH CLIENT (STATUS + TEMPLATE TRIGGER) --------------------
+// -------------------- PATCH CLIENT (GENERAL EDITS) --------------------
 
 router.patch("/:id", (req, res) => {
   const clear = withTimeout(res, "PATCH /api/clients/:id");
@@ -126,19 +118,14 @@ router.patch("/:id", (req, res) => {
           : existing.status_id,
     };
 
-    if (!merged.name || merged.phone.length !== 10) {
-      clear();
-      return res.status(400).json({ error: "Invalid name or phone" });
-    }
-
     db.run(
       `
       UPDATE clients SET
-        name = ?, phone = ?, email = ?, notes = ?, language = ?, office = ?,
-        case_type = ?, case_subtype = ?, appt_setter = ?, ic = ?,
-        attorney_assigned = ?, intake_coordinator = ?,
-        appt_date = ?, appt_time = ?, status_id = ?
-      WHERE id = ?
+        name=?, phone=?, email=?, notes=?, language=?, office=?,
+        case_type=?, case_subtype=?, appt_setter=?, ic=?,
+        attorney_assigned=?, intake_coordinator=?,
+        appt_date=?, appt_time=?, status_id=?
+      WHERE id=?
       `,
       [
         merged.name,
@@ -161,7 +148,6 @@ router.patch("/:id", (req, res) => {
       (uErr) => {
         if (uErr) {
           clear();
-          console.error(uErr);
           return res.status(500).json({ error: "Update failed" });
         }
 
@@ -175,12 +161,8 @@ router.patch("/:id", (req, res) => {
           [id],
           async (fErr, updatedClient) => {
             clear();
-            if (fErr) {
-              console.error(fErr);
-              return res.status(500).json({ error: "Reload failed" });
-            }
+            if (fErr) return res.status(500).json({ error: "Reload failed" });
 
-            // 🔥 TEMPLATE TRIGGER — ONLY WHEN STATUS CHANGES
             if (
               body.status_id !== undefined &&
               Number(oldStatusId) !== Number(merged.status_id)
@@ -200,6 +182,65 @@ router.patch("/:id", (req, res) => {
   });
 });
 
+// ===================================================================
+// 🔥 PUT /api/clients/:id/status  (RESTORED FOR FRONTEND)
+// ===================================================================
+
+router.put("/:id/status", (req, res) => {
+  const clear = withTimeout(res, "PUT /api/clients/:id/status");
+  const clientId = req.params.id;
+  const { status_id } = req.body || {};
+
+  if (!status_id) {
+    clear();
+    return res.status(400).json({ error: "status_id required" });
+  }
+
+  db.get("SELECT * FROM clients WHERE id = ?", [clientId], (err, existing) => {
+    if (err || !existing) {
+      clear();
+      return res.status(404).json({ error: "Client not found" });
+    }
+
+    const oldStatusId = existing.status_id;
+
+    db.run(
+      "UPDATE clients SET status_id = ? WHERE id = ?",
+      [status_id, clientId],
+      (uErr) => {
+        if (uErr) {
+          clear();
+          return res.status(500).json({ error: "Update failed" });
+        }
+
+        db.get(
+          `
+          SELECT c.*, s.name AS status
+          FROM clients c
+          LEFT JOIN statuses s ON s.id = c.status_id
+          WHERE c.id = ?
+          `,
+          [clientId],
+          async (fErr, updatedClient) => {
+            clear();
+            if (fErr) return res.status(500).json({ error: "Reload failed" });
+
+            if (Number(oldStatusId) !== Number(status_id)) {
+              try {
+                await enqueueTemplatesForClient(updatedClient);
+              } catch (e) {
+                console.error("❌ Template enqueue failed:", e.message);
+              }
+            }
+
+            res.json({ success: true, client: updatedClient });
+          }
+        );
+      }
+    );
+  });
+});
+
 // -------------------- DELETE CLIENT --------------------
 
 router.delete("/:id", (req, res) => {
@@ -207,10 +248,7 @@ router.delete("/:id", (req, res) => {
 
   db.run("DELETE FROM clients WHERE id = ?", [req.params.id], (err) => {
     clear();
-    if (err) {
-      console.error(err);
-      return res.status(500).json({ error: "Delete failed" });
-    }
+    if (err) return res.status(500).json({ error: "Delete failed" });
     res.json({ success: true });
   });
 });
