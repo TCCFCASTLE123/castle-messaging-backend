@@ -23,7 +23,7 @@ const internalRoutes = require("./routes/internal");
 // Scheduler
 const { startScheduler } = require("./lib/scheduler");
 
-// DB (forces DB + migrations)
+// DB
 require("./db");
 
 // -------------------- APP --------------------
@@ -36,34 +36,34 @@ app.use((req, res, next) => {
   next();
 });
 
-// -------------------- CORS (🔥 FIXED, NO CRASH 🔥) --------------------
+// -------------------- CORS (🔥 MUST BE FIRST 🔥) --------------------
 const allowedOrigins = [
   "http://localhost:3000",
   "https://castle-consulting-firm-messaging.onrender.com",
 ];
 
-app.use(
-  cors({
-    origin(origin, callback) {
-      // allow same-origin & server-to-server
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) return callback(null, true);
-      return callback(new Error("CORS blocked origin: " + origin));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "x-api-key",
-      "x-webhook-key",
-    ],
-  })
-);
+const corsMiddleware = cors({
+  origin(origin, callback) {
+    // Allow server-to-server & same-origin
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error("CORS blocked origin: " + origin));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "x-api-key",
+    "x-webhook-key",
+  ],
+});
 
-// IMPORTANT:
-// ❌ DO NOT add app.options("*", cors())
-// cors() already handles preflight safely
+// 🔥 Apply CORS globally BEFORE auth
+app.use(corsMiddleware);
+
+// 🔥 Explicitly allow preflight through (NO AUTH)
+app.options("*", corsMiddleware);
 
 // -------------------- BODY PARSER --------------------
 app.use(express.json());
@@ -87,12 +87,14 @@ startScheduler(io);
 // -------------------- ROUTES --------------------
 app.use("/api/auth", authRoutes);
 
+// 🔐 PROTECTED ROUTES (AUTH DOES NOT SEE OPTIONS)
 app.use("/api/messages", requireAuth, messageRoutes);
 app.use("/api/clients", requireAuth, clientRoutes);
 app.use("/api/statuses", requireAuth, statusRoutes);
 app.use("/api/templates", requireAuth, templateRoutes);
 app.use("/api/scheduled_messages", requireAuth, scheduledMessagesRoutes);
 
+// 🌐 Webhooks / internal
 app.use("/api/twilio", twilioRoutes);
 app.use("/api/sheets", sheetsWebhookRoutes);
 app.use("/api/internal", internalRoutes);
