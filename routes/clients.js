@@ -3,6 +3,7 @@
 const express = require("express");
 const router = express.Router();
 const db = require("../db");
+const { enqueueTemplatesForClient } = require("../lib/enqueueTemplates");
 
 function canonicalPhone(input) {
   if (!input) return "";
@@ -317,3 +318,4 @@ router.delete("/:id", (req, res) => {
 });
 
 module.exports = router;
+
