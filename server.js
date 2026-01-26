@@ -23,7 +23,7 @@ const internalRoutes = require("./routes/internal");
 // Scheduler
 const { startScheduler } = require("./lib/scheduler");
 
-// DB
+// DB (forces DB + migrations to run)
 require("./db");
 
 // -------------------- APP --------------------
@@ -36,47 +36,30 @@ app.use((req, res, next) => {
   next();
 });
 
-// -------------------- CORS (SAFE FOR NODE 22) --------------------
+// -------------------- CORS --------------------
 const allowedOrigins = [
   "http://localhost:3000",
   "https://castle-consulting-firm-messaging.onrender.com",
 ];
 
-const corsMiddleware = cors({
-  origin(origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error("CORS blocked origin: " + origin));
-  },
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: [
-    "Content-Type",
-    "Authorization",
-    "x-api-key",
-    "x-webhook-key",
-  ],
-});
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error("CORS blocked origin: " + origin));
+    },
+    credentials: true,
+  })
+);
 
-// 🔥 CORS must run BEFORE auth
-app.use(corsMiddleware);
-
-// 🔥 SAFELY short-circuit preflight WITHOUT routes
-app.use((req, res, next) => {
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(204);
-  }
-  next();
-});
-
-// -------------------- BODY PARSER --------------------
 app.use(express.json());
 
 // -------------------- SOCKET.IO --------------------
 const io = new Server(server, {
   cors: {
     origin: allowedOrigins,
-    methods: ["GET", "POST", "PUT", "PATCH"],
+    methods: ["GET", "POST"],
     credentials: true,
   },
 });
@@ -85,12 +68,8 @@ io.on("connection", (socket) => {
   console.log("🔌 Socket connected:", socket.id);
 });
 
-// -------------------- START SCHEDULER --------------------
-startScheduler(io);
-
 // -------------------- ROUTES --------------------
 app.use("/api/auth", authRoutes);
-
 app.use("/api/messages", requireAuth, messageRoutes);
 app.use("/api/clients", requireAuth, clientRoutes);
 app.use("/api/statuses", requireAuth, statusRoutes);
@@ -106,8 +85,13 @@ app.get("/", (req, res) => {
   res.send("Castle Consulting Messaging API is running!");
 });
 
-// -------------------- LISTEN --------------------
+// -------------------- START SERVER + SCHEDULER --------------------
 const PORT = process.env.PORT || 10000;
+
 server.listen(PORT, () => {
   console.log(`🚀 Server listening on port ${PORT}`);
+
+  // 🔥 START SCHEDULER *AFTER* SERVER IS LIVE
+  console.log("🧪 Starting scheduler…");
+  startScheduler(io);
 });
