@@ -36,7 +36,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// -------------------- CORS (🔥 MUST BE FIRST 🔥) --------------------
+// -------------------- CORS (SAFE FOR NODE 22) --------------------
 const allowedOrigins = [
   "http://localhost:3000",
   "https://castle-consulting-firm-messaging.onrender.com",
@@ -44,7 +44,6 @@ const allowedOrigins = [
 
 const corsMiddleware = cors({
   origin(origin, callback) {
-    // Allow server-to-server & same-origin
     if (!origin) return callback(null, true);
     if (allowedOrigins.includes(origin)) return callback(null, true);
     return callback(new Error("CORS blocked origin: " + origin));
@@ -59,11 +58,16 @@ const corsMiddleware = cors({
   ],
 });
 
-// 🔥 Apply CORS globally BEFORE auth
+// 🔥 CORS must run BEFORE auth
 app.use(corsMiddleware);
 
-// 🔥 Explicitly allow preflight through (NO AUTH)
-app.options("*", corsMiddleware);
+// 🔥 SAFELY short-circuit preflight WITHOUT routes
+app.use((req, res, next) => {
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+  next();
+});
 
 // -------------------- BODY PARSER --------------------
 app.use(express.json());
@@ -87,14 +91,12 @@ startScheduler(io);
 // -------------------- ROUTES --------------------
 app.use("/api/auth", authRoutes);
 
-// 🔐 PROTECTED ROUTES (AUTH DOES NOT SEE OPTIONS)
 app.use("/api/messages", requireAuth, messageRoutes);
 app.use("/api/clients", requireAuth, clientRoutes);
 app.use("/api/statuses", requireAuth, statusRoutes);
 app.use("/api/templates", requireAuth, templateRoutes);
 app.use("/api/scheduled_messages", requireAuth, scheduledMessagesRoutes);
 
-// 🌐 Webhooks / internal
 app.use("/api/twilio", twilioRoutes);
 app.use("/api/sheets", sheetsWebhookRoutes);
 app.use("/api/internal", internalRoutes);
