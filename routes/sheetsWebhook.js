@@ -3,6 +3,9 @@
 const express = require("express");
 const router = express.Router();
 const db = require("../db");
+const { enqueueTemplatesForClient } = require("../lib/enqueueTemplates");
+
+/* ===================== AUTH ===================== */
 
 function requireKey(req, res, next) {
   const key = req.header("x-webhook-key");
@@ -12,29 +15,13 @@ function requireKey(req, res, next) {
   next();
 }
 
+/* ===================== HELPERS ===================== */
+
 function canonicalPhone(input) {
   if (!input) return "";
   const digits = String(input).replace(/\D/g, "");
   if (digits.length === 11 && digits.startsWith("1")) return digits.slice(1);
   return digits;
-}
-
-const ALLOWED_CODES = new Set([
-  "CC","CLC","DT","GBC","ILD","JMP","JH","JWG","OXS","OAC","NVA","TRD","Walk-in"
-]);
-
-function cleanCode(v) {
-  const s = (v || "").toString().trim();
-  if (!s) return null;
-  // If it matches your allowed set, keep it; otherwise still allow saving raw text
-  return ALLOWED_CODES.has(s) ? s : s;
-}
-
-function buildAppointmentDatetime(apptDate, apptTime) {
-  const d = (apptDate || "").toString().trim();
-  const t = (apptTime || "").toString().trim();
-  if (!d && !t) return null;
-  return `${d}${t ? " " + t : ""}`.trim();
 }
 
 function pick(row, ...keys) {
@@ -45,6 +32,23 @@ function pick(row, ...keys) {
     }
   }
   return "";
+}
+
+function buildAppointmentDatetime(apptDate, apptTime) {
+  const d = (apptDate || "").toString().trim();
+  const t = (apptTime || "").toString().trim();
+  if (!d && !t) return null;
+  return `${d}${t ? " " + t : ""}`.trim();
+}
+
+const ALLOWED_CODES = new Set([
+  "CC","CLC","DT","GBC","ILD","JMP","JH","JWG","OXS","OAC","NVA","TRD","Walk-in"
+]);
+
+function cleanCode(v) {
+  const s = (v || "").toString().trim();
+  if (!s) return null;
+  return ALLOWED_CODES.has(s) ? s : s;
 }
 
 function getStatusIdByName(statusText) {
@@ -63,6 +67,8 @@ function getStatusIdByName(statusText) {
   });
 }
 
+/* ===================== ROUTE ===================== */
+
 router.post("/update", requireKey, async (req, res) => {
   try {
     const payload = req.body || {};
@@ -70,30 +76,28 @@ router.post("/update", requireKey, async (req, res) => {
 
     const name = String(pick(row, "name", "full_name", "FULL NAME")).trim();
     const phone = canonicalPhone(pick(row, "phone", "PHONE NUMBER"));
-    const emailRaw = String(pick(row, "email", "EMAIL")).trim();
-    const office = String(pick(row, "office", "OFFICE")).trim();
+    if (!phone || phone.length !== 10) {
+      return res.status(400).json({ ok: false, error: "Missing/invalid phone" });
+    }
+
+    const email = String(pick(row, "email", "EMAIL")).trim() || null;
+    const office = String(pick(row, "office", "OFFICE")).trim() || null;
+    const language = String(pick(row, "language", "SP/ENG?", "ENG/SP?")).trim() || null;
 
     const statusText = String(pick(row, "status", "STATUS")).trim();
     const status_id = await getStatusIdByName(statusText);
 
-    const caseGroup = String(pick(row, "case_group", "CR/IMM/BK?")).trim();
-
-    // ✅ main dropdown: Criminal/Immigration/Bankruptcy
-    const caseTypeMain = String(pick(row, "case_type")).trim();
-
-    // ✅ subtype: CI - Criminal Investigation, etc.
-    const caseSubtype = String(pick(row, "case_subtype", "CASE TYPE", "SUB CASE TYPE")).trim();
-
-    const language = String(pick(row, "language", "SP/ENG?", "ENG/SP?")).trim();
+    const case_type = String(pick(row, "case_type")).trim() || null;
+    const case_subtype = String(
+      pick(row, "case_subtype", "CASE TYPE", "SUB CASE TYPE")
+    ).trim() || null;
 
     const apptSetter = cleanCode(pick(row, "appt_setter", "APPT. SETTER"));
 
-    // ✅ accept both names
     const icIncoming = pick(row, "ic", "intake_coordinator", "I.C.");
     const ic = cleanCode(icIncoming);
     const intake_coordinator = cleanCode(icIncoming);
 
-    // ✅ should already be formatted by Apps Script
     const appt_date = String(pick(row, "appt_date", "APPT. DATE")).trim() || null;
     const appt_time = String(pick(row, "appt_time", "APPT. TIME")).trim() || null;
 
@@ -102,9 +106,8 @@ router.post("/update", requireKey, async (req, res) => {
       String(pick(row, "appointment_at")).trim() ||
       null;
 
-    const notes = String(pick(row, "notes", "NOTES")).trim();
+    const notes = String(pick(row, "notes", "NOTES")).trim() || null;
 
-    // ✅ NEW: Assigned Attorney from Apps Script / sheet
     const attorney_assigned =
       String(
         pick(
@@ -116,31 +119,28 @@ router.post("/update", requireKey, async (req, res) => {
         )
       ).trim() || null;
 
-    if (!phone || phone.length !== 10) {
-      return res.status(400).json({ ok: false, error: "Missing/invalid phone" });
-    }
+    /* ---------- LOAD OLD STATUS BEFORE UPSERT ---------- */
 
-    const email = emailRaw || null;
-    const finalOffice = office || null;
-    const finalLanguage = language || null;
+    const oldStatusId = await new Promise((resolve) => {
+      db.get(
+        "SELECT status_id FROM clients WHERE phone = ?",
+        [phone],
+        (err, row) => resolve(row ? row.status_id : null)
+      );
+    });
 
-    // store main in case_type, detailed in case_subtype
-    const finalCaseType = caseTypeMain || null;
-    const finalCaseSubtype = caseSubtype || null;
+    /* ---------- UPSERT CLIENT ---------- */
 
     const sql = `
       INSERT INTO clients
-        (
-          name, phone, email, notes, language, office,
-          case_type, case_subtype,
-          appt_date, appt_time, appointment_datetime,
-          status_id, status_text,
-          case_group, appt_setter,
-          ic, intake_coordinator,
-          attorney_assigned
-        )
-      VALUES
-        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (
+        name, phone, email, notes, language, office,
+        case_type, case_subtype,
+        appt_date, appt_time, appointment_datetime,
+        status_id, status_text,
+        appt_setter, ic, intake_coordinator, attorney_assigned
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(phone) DO UPDATE SET
         name = excluded.name,
         email = excluded.email,
@@ -158,13 +158,10 @@ router.post("/update", requireKey, async (req, res) => {
         status_id = excluded.status_id,
         status_text = excluded.status_text,
 
-        case_group = excluded.case_group,
         appt_setter = excluded.appt_setter,
-
         ic = excluded.ic,
         intake_coordinator = excluded.intake_coordinator,
 
-        -- ✅ do NOT wipe attorney if sheet sends blank/null
         attorney_assigned = COALESCE(excluded.attorney_assigned, clients.attorney_assigned)
     `;
 
@@ -174,12 +171,12 @@ router.post("/update", requireKey, async (req, res) => {
         name || `Sheet ${phone}`,
         phone,
         email,
-        notes || null,
-        finalLanguage,
-        finalOffice,
+        notes,
+        language,
+        office,
 
-        finalCaseType,
-        finalCaseSubtype,
+        case_type,
+        case_subtype,
 
         appt_date,
         appt_time,
@@ -188,64 +185,41 @@ router.post("/update", requireKey, async (req, res) => {
         status_id,
         statusText || null,
 
-        caseGroup || null,
         apptSetter,
-
         ic,
         intake_coordinator,
-
         attorney_assigned,
       ],
-      function (err) {
+      async (err) => {
         if (err) {
           console.error("❌ sheets webhook upsert error:", err.message);
           return res.status(500).json({ ok: false, error: err.message });
         }
 
-        if (req.io) {
-          req.io.emit("client_updated", {
-            phone,
-            name: name || `Sheet ${phone}`,
-            email,
-            office: finalOffice,
-            language: finalLanguage,
+        /* ---------- 🔥 AUTOMATION TRIGGER ---------- */
 
-            case_type: finalCaseType,
-            case_subtype: finalCaseSubtype,
-
-            appt_date,
-            appt_time,
-            appointment_datetime,
-
-            status_id,
-            status_text: statusText || null,
-
-            case_group: caseGroup || null,
-            appt_setter: apptSetter,
-
-            ic,
-            intake_coordinator,
-
-            attorney_assigned, // ✅ NEW
-
-            notes: notes || null,
-          });
+        if (oldStatusId !== status_id) {
+          db.get(
+            `
+            SELECT c.*, s.name AS status
+            FROM clients c
+            LEFT JOIN statuses s ON s.id = c.status_id
+            WHERE c.phone = ?
+            `,
+            [phone],
+            async (err2, updatedClient) => {
+              if (!err2 && updatedClient && updatedClient.status) {
+                try {
+                  await enqueueTemplatesForClient(updatedClient);
+                } catch (e) {
+                  console.error("❌ Sheet-triggered enqueue failed:", e.message);
+                }
+              }
+            }
+          );
         }
 
-        return res.json({
-          ok: true,
-          status_id,
-          status_text: statusText || null,
-          saved: {
-            case_type: finalCaseType,
-            case_subtype: finalCaseSubtype,
-            appt_date,
-            appt_time,
-            ic,
-            intake_coordinator,
-            attorney_assigned, // ✅ NEW
-          },
-        });
+        return res.json({ ok: true, status_id, status_text: statusText });
       }
     );
   } catch (e) {
