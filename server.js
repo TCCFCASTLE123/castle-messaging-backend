@@ -23,7 +23,7 @@ const internalRoutes = require("./routes/internal");
 // Scheduler
 const { startScheduler } = require("./lib/scheduler");
 
-// DB (forces DB + migrations to run)
+// DB (forces schema + migrations)
 require("./db");
 
 // -------------------- APP --------------------
@@ -50,9 +50,13 @@ app.use(
       return callback(new Error("CORS blocked origin: " + origin));
     },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-api-key", "x-webhook-key"],
   })
 );
 
+// 🔥 REQUIRED FOR TWILIO
+app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
 // -------------------- SOCKET.IO --------------------
@@ -68,16 +72,26 @@ io.on("connection", (socket) => {
   console.log("🔌 Socket connected:", socket.id);
 });
 
+// Make io available to routes
+app.use((req, res, next) => {
+  req.io = io;
+  next();
+});
+
 // -------------------- ROUTES --------------------
 app.use("/api/auth", authRoutes);
+
 app.use("/api/messages", requireAuth, messageRoutes);
 app.use("/api/clients", requireAuth, clientRoutes);
 app.use("/api/statuses", requireAuth, statusRoutes);
 app.use("/api/templates", requireAuth, templateRoutes);
 app.use("/api/scheduled_messages", requireAuth, scheduledMessagesRoutes);
 
+// 🌐 Webhooks (NO AUTH)
 app.use("/api/twilio", twilioRoutes);
 app.use("/api/sheets", sheetsWebhookRoutes);
+
+// 🤖 Internal
 app.use("/api/internal", internalRoutes);
 
 // -------------------- HOME --------------------
@@ -85,13 +99,10 @@ app.get("/", (req, res) => {
   res.send("Castle Consulting Messaging API is running!");
 });
 
-// -------------------- START SERVER + SCHEDULER --------------------
+// -------------------- START --------------------
 const PORT = process.env.PORT || 10000;
 
 server.listen(PORT, () => {
   console.log(`🚀 Server listening on port ${PORT}`);
-
-  // 🔥 START SCHEDULER *AFTER* SERVER IS LIVE
-  console.log("🧪 Starting scheduler…");
-  startScheduler(io);
+  startScheduler(io); // start AFTER server is ready
 });
