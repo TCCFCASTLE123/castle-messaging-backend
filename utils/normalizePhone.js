@@ -1,14 +1,41 @@
-module.exports = function normalizePhone(input) {
+/**
+ * Phone normalization utilities
+ *
+ * Canonical DB format: 10-digit US number (XXXXXXXXXX)
+ * Twilio format: E.164 (+1XXXXXXXXXX)
+ */
+
+// --------------------
+// Normalize for DB
+// --------------------
+function normalizeForDb(input) {
   if (!input) return "";
 
-  // strip everything except digits
   const digits = String(input).replace(/\D/g, "");
 
-  // allow 10-digit US numbers
-  if (digits.length === 10) return `+1${digits}`;
+  // Strip leading country code
+  if (digits.length === 11 && digits.startsWith("1")) {
+    return digits.slice(1);
+  }
 
-  // allow 11-digit starting with 1
-  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  // Valid US number
+  if (digits.length === 10) {
+    return digits;
+  }
 
-  return ""; // invalid
+  return "";
+}
+
+// --------------------
+// Normalize for Twilio
+// --------------------
+function normalizeForTwilio(input) {
+  const dbPhone = normalizeForDb(input);
+  if (!dbPhone) return "";
+  return `+1${dbPhone}`;
+}
+
+module.exports = {
+  normalizeForDb,
+  normalizeForTwilio,
 };
