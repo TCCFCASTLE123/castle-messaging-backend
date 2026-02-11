@@ -156,14 +156,28 @@ router.post("/send-sms", requireInternalKey, async (req, res) => {
       return res.status(400).json({ message: "phone and text required" });
     }
 
-    const client = await findClientByPhone(rawPhone);
-    if (!client?.id) {
-      return res.status(400).json({
-        message: "Could not match client by phone",
-        raw: rawPhone,
-        normalized: normalizeForDb(rawPhone),
-      });
-    }
+let client = await findClientByPhone(rawPhone);
+
+if (!client?.id) {
+  const phone = normalizeForDb(rawPhone);
+
+  if (!phone) {
+    return res.status(400).json({
+      message: "Invalid phone number",
+      raw: rawPhone,
+    });
+  }
+
+  const name = "CALL Appointment";
+
+  await dbRun(
+    "INSERT INTO clients (name, phone) VALUES (?, ?)",
+    [name, phone]
+  );
+
+  client = await findClientByPhone(rawPhone);
+}
+
 
     // 1) Send via Twilio
     const tw = await sendClientSms({ to: rawPhone, body: text });
