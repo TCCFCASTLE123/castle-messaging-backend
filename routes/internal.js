@@ -73,12 +73,16 @@ async function findClientByPhone(rawPhone) {
   if (!phone) return null;
 
   return await dbGet(
-    `SELECT id, name
-     FROM clients
-     WHERE phone = ?`,
+    `
+    SELECT id, name
+    FROM clients
+    WHERE
+      REPLACE(REPLACE(REPLACE(REPLACE(phone,'-',''),'(',''),')',''),' ','') = ?
+    `,
     [phone]
   );
 }
+
 
 /* ------------------------------------------------------------------ */
 /* FRONTEND LINK */
