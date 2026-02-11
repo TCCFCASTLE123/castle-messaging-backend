@@ -1,14 +1,11 @@
 /**
- * Phone normalization utilities
+ * Phone normalization utility
  *
  * Canonical DB format: 10-digit US number (XXXXXXXXXX)
  * Twilio format: E.164 (+1XXXXXXXXXX)
  */
 
-// --------------------
-// Normalize for DB
-// --------------------
-function normalizeForDb(input) {
+function normalizePhone(input) {
   if (!input) return "";
 
   const digits = String(input).replace(/\D/g, "");
@@ -26,16 +23,11 @@ function normalizeForDb(input) {
   return "";
 }
 
-// --------------------
-// Normalize for Twilio
-// --------------------
-function normalizeForTwilio(input) {
-  const dbPhone = normalizeForDb(input);
+// Optional helper if you need Twilio format
+normalizePhone.toTwilio = function (input) {
+  const dbPhone = normalizePhone(input);
   if (!dbPhone) return "";
   return `+1${dbPhone}`;
-}
-
-module.exports = {
-  normalizeForDb,
-  normalizeForTwilio,
 };
+
+module.exports = normalizePhone;
