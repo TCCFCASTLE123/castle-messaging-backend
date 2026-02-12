@@ -197,7 +197,40 @@ router.post("/inbound", async (req, res) => {
     const fromE164 = toE164FromCanonical(fromCanon);
     const body = (req.body.Body || "").trim();
     const numMedia = Number(req.body.NumMedia || 0);
-const mediaUrl = numMedia > 0 ? req.body.MediaUrl0 : null;
+let mediaUrl = null;
+
+if (numMedia > 0) {
+  const twilioMediaUrl = req.body.MediaUrl0;
+
+  const axios = require("axios");
+  const path = require("path");
+  const fs = require("fs");
+
+  const ext = req.body.MediaContentType0?.includes("png")
+    ? ".png"
+    : ".jpg";
+
+  const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+  const savePath = `/var/data/uploads/${filename}`;
+
+  const response = await axios.get(twilioMediaUrl, {
+    responseType: "stream",
+    auth: {
+      username: process.env.TWILIO_ACCOUNT_SID,
+      password: process.env.TWILIO_AUTH_TOKEN,
+    },
+  });
+
+  await new Promise((resolve, reject) => {
+    const stream = fs.createWriteStream(savePath);
+    response.data.pipe(stream);
+    stream.on("finish", resolve);
+    stream.on("error", reject);
+  });
+
+  mediaUrl = `/uploads/${filename}`;
+}
+
 
     const sid = req.body.MessageSid || null;
 
@@ -450,6 +483,7 @@ if (lastUserId) {
 });
 
 module.exports = router;
+
 
 
 
