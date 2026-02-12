@@ -187,11 +187,6 @@ router.post("/send", requireAuth, async (req, res) => {
       to,
       body: text,
     });
-    console.log("==== MMS DEBUG ====");
-console.log("PUBLIC_BASE_URL:", process.env.PUBLIC_BASE_URL);
-console.log("Client phone:", clientRow?.phone);
-console.log("====================");
-
 
     // Save to DB
     const ts = new Date().toISOString();
@@ -369,7 +364,7 @@ router.post("/upload-image", requireAuth, upload.single("file"), async (req, res
         }
       );
     });
-
+console.log("Twilio mediaUrl being sent:", publicUrl);
     // 📨 Send image via Twilio
     await twilioClient.messages.create({
       from: twilioFrom,
@@ -410,6 +405,7 @@ router.post("/upload-image", requireAuth, upload.single("file"), async (req, res
 });
 
 module.exports = router;
+
 
 
 
