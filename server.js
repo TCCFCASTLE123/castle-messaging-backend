@@ -59,6 +59,8 @@ app.use(
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
+// ✅ SERVE UPLOADED IMAGES
+app.use("/uploads", express.static("/var/data/uploads"));
 // -------------------- SOCKET.IO --------------------
 const io = new Server(server, {
   cors: {
@@ -106,3 +108,4 @@ server.listen(PORT, () => {
   console.log(`🚀 Server listening on port ${PORT}`);
   startScheduler(io); // start AFTER server is ready
 });
+
