@@ -339,7 +339,7 @@ router.post("/upload-image", requireAuth, upload.single("file"), async (req, res
     }
 
     const imagePath = `/uploads/${req.file.filename}`;
-    const publicUrl = `${process.env.PUBLIC_BASE_URL}${imagePath}`;
+ const publicUrl = `${process.env.PUBLIC_BASE_URL.trim()}${imagePath}`;
     const ts = new Date().toISOString();
 
     // 💾 Save message to DB (text required because NOT NULL)
@@ -405,6 +405,7 @@ console.log("Twilio mediaUrl being sent:", publicUrl);
 });
 
 module.exports = router;
+
 
 
 
