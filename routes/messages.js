@@ -326,25 +326,38 @@ router.post("/upload-image", requireAuth, upload.single("file"), async (req, res
       return res.status(400).json({ ok: false, error: "Missing file or client_id" });
     }
 
+    // 🔎 Get client (needed for phone number)
+    const clientRow = await new Promise((resolve, reject) => {
+      db.get("SELECT id, phone, name FROM clients WHERE id = ?", [clientId], (err, row) => {
+        if (err) return reject(err);
+        resolve(row || null);
+      });
+    });
+
+    if (!clientRow) {
+      return res.status(404).json({ ok: false, error: "Client not found" });
+    }
+
     const imagePath = `/uploads/${req.file.filename}`;
+    const publicUrl = `${process.env.PUBLIC_BASE_URL}${imagePath}`;
     const ts = new Date().toISOString();
 
+    // 💾 Save message to DB (text required because NOT NULL)
     const messageId = await new Promise((resolve, reject) => {
-     db.run(
-  `INSERT INTO messages
-   (client_id, sender, text, image_url, direction, timestamp, external_id, user_id)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  [
-    clientId,
-    sender,
-    "[Image]",        // 👈 THIS FIXES THE SQLITE ERROR
-    imagePath,
-    "outbound",
-    ts,
-    null,
-    userId,
-  ],
-        [clientId, sender, imagePath, "outbound", ts, null, userId],
+      db.run(
+        `INSERT INTO messages
+         (client_id, sender, text, image_url, direction, timestamp, external_id, user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          clientId,
+          sender,
+          "[Image]",        // Required (NOT NULL constraint)
+          imagePath,
+          "outbound",
+          ts,
+          null,
+          userId,
+        ],
         function (err) {
           if (err) return reject(err);
           resolve(this.lastID);
@@ -352,15 +365,26 @@ router.post("/upload-image", requireAuth, upload.single("file"), async (req, res
       );
     });
 
+    // 📨 Send image via Twilio
+    await twilioClient.messages.create({
+      from: twilioFrom,
+      to: normalizePhone(clientRow.phone),
+      mediaUrl: [publicUrl],
+    });
+
+    // Update ordering
     db.run(
       `UPDATE clients SET last_message_at = ?, last_message_text = ? WHERE id = ?`,
       [ts, "[Image]", clientId]
     );
 
+    // 🔴 Emit live socket event
     const payload = {
       id: messageId,
       client_id: clientId,
+      client_name: clientRow.name || undefined,
       sender,
+      text: "[Image]",
       image_url: imagePath,
       direction: "outbound",
       timestamp: ts,
@@ -373,6 +397,7 @@ router.post("/upload-image", requireAuth, upload.single("file"), async (req, res
     }
 
     return res.json({ ok: true, id: messageId, image_url: imagePath });
+
   } catch (err) {
     console.error("❌ Image upload failed:", err);
     return res.status(500).json({ ok: false, error: err.message });
@@ -380,6 +405,7 @@ router.post("/upload-image", requireAuth, upload.single("file"), async (req, res
 });
 
 module.exports = router;
+
 
 
 
