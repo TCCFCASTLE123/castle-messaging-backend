@@ -196,12 +196,15 @@ router.post("/inbound", async (req, res) => {
     const fromCanon = canonicalPhone(req.body.From || "");
     const fromE164 = toE164FromCanonical(fromCanon);
     const body = (req.body.Body || "").trim();
+    const numMedia = Number(req.body.NumMedia || 0);
+const mediaUrl = numMedia > 0 ? req.body.MediaUrl0 : null;
+
     const sid = req.body.MessageSid || null;
 
-    if (!fromCanon || fromCanon.length !== 10 || !body) {
-      const twiml = new MessagingResponse();
-      return res.status(200).send(twiml.toString());
-    }
+    if (!fromCanon || fromCanon.length !== 10) {
+  const twiml = new MessagingResponse();
+  return res.status(200).send(twiml.toString());
+}
 
     const clientRow = await new Promise((resolve, reject) => {
       db.get(
@@ -235,17 +238,27 @@ router.post("/inbound", async (req, res) => {
 
     const ts = new Date().toISOString();
 
-    const messageId = await new Promise((resolve, reject) => {
-      db.run(
-        `INSERT INTO messages (client_id, sender, text, direction, timestamp, external_id)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [client_id, "client", body, "inbound", ts, sid],
-        function (err) {
-          if (err) return reject(err);
-          resolve(this.lastID);
-        }
-      );
-    });
+const messageId = await new Promise((resolve, reject) => {
+  db.run(
+    `INSERT INTO messages
+     (client_id, sender, text, image_url, direction, timestamp, external_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      client_id,
+      "client",
+      body || (mediaUrl ? "[Image]" : ""),
+      mediaUrl || null,
+      "inbound",
+      ts,
+      sid,
+    ],
+    function (err) {
+      if (err) return reject(err);
+      resolve(this.lastID);
+    }
+  );
+});
+
 
     // ✅ Persist “phone-like ordering”
     db.run(
@@ -260,7 +273,8 @@ router.post("/inbound", async (req, res) => {
       phone: fromE164 || fromCanon,
       phone_canonical: fromCanon,
       sender: "client",
-      text: body,
+      text: body || (mediaUrl ? "[Image]" : ""),
+image_url: mediaUrl || null,
       direction: "inbound",
       timestamp: ts,
       external_id: sid,
@@ -436,6 +450,7 @@ if (lastUserId) {
 });
 
 module.exports = router;
+
 
 
 
