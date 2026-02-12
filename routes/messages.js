@@ -330,10 +330,20 @@ router.post("/upload-image", requireAuth, upload.single("file"), async (req, res
     const ts = new Date().toISOString();
 
     const messageId = await new Promise((resolve, reject) => {
-      db.run(
-        `INSERT INTO messages
-         (client_id, sender, image_url, direction, timestamp, external_id, user_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+     db.run(
+  `INSERT INTO messages
+   (client_id, sender, text, image_url, direction, timestamp, external_id, user_id)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  [
+    clientId,
+    sender,
+    "[Image]",        // 👈 THIS FIXES THE SQLITE ERROR
+    imagePath,
+    "outbound",
+    ts,
+    null,
+    userId,
+  ],
         [clientId, sender, imagePath, "outbound", ts, null, userId],
         function (err) {
           if (err) return reject(err);
@@ -370,5 +380,6 @@ router.post("/upload-image", requireAuth, upload.single("file"), async (req, res
 });
 
 module.exports = router;
+
 
 
