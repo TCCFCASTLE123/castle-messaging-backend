@@ -7,6 +7,25 @@ const normalizePhone = require("../utils/normalizePhone");
 
 // ✅ IMPORTANT: requireAuth so req.user is populated (username + id)
 const { requireAuth } = require("./auth");
+const multer = require("multer");
+const path = require("path");
+
+// Ensure uploads folder exists
+const fs = require("fs");
+const uploadDir = "/var/data/uploads";
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: uploadDir,
+    filename: (req, file, cb) => {
+      const unique = Date.now() + "-" + Math.round(Math.random() * 1e9);
+      cb(null, unique + path.extname(file.originalname));
+    },
+  }),
+});
 
 // Twilio client
 const twilioClient = twilio(
@@ -41,7 +60,7 @@ router.get("/", (req, res) => {
   const runQueryByClientId = (id) => {
     db.all(
       `
-      SELECT id, client_id, sender, text, direction, timestamp, external_id, user_id
+     SELECT id, client_id, sender, text, image_url, direction, timestamp, external_id, user_id
       FROM messages
       WHERE client_id = ?
       ORDER BY datetime(timestamp) ASC, id ASC
@@ -79,7 +98,7 @@ router.get("/conversation/:client_id", (req, res) => {
 
   db.all(
     `
-    SELECT id, client_id, sender, text, direction, timestamp, external_id, user_id
+    SELECT id, client_id, sender, text, image_url, direction, timestamp, external_id, user_id
     FROM messages
     WHERE client_id = ?
     ORDER BY datetime(timestamp) ASC, id ASC
@@ -211,8 +230,7 @@ router.post("/send", requireAuth, async (req, res) => {
       req.io.emit("newMessage", payload);
       req.io.emit("message", payload);
     }
-
-    return res.json({ ok: true, id: messageId, client_id, sid: sent.sid });
+ return res.json({ ok: true, id: messageId, client_id, sid: sent.sid });
   } catch (err) {
     console.error("❌ POST /api/messages/send failed:", err);
     return res.status(500).json({
@@ -289,11 +307,66 @@ router.post("/note", (req, res) => {
           req.io.emit("newMessage", payload);
           req.io.emit("message", payload);
         }
-
-        return res.json({ ok: true, id: this.lastID, client_id: row.id });
-      }
-    );
-  });
+return res.json({ ok: true, id: this.lastID, client_id: row.id });
+});
+});
 });
 
-module.exports = router;
+/**
+ * POST /api/messages/upload-image
+ */
+router.post("/upload-image", requireAuth, upload.single("file"), async (req, res) => {
+  try {
+    const clientId = String(req.body.client_id || "").trim();
+    const userId = req.user?.id ?? null;
+    const sender =
+      (req.user?.username && String(req.user.username).trim()) || "agent";
+
+    if (!clientId || !req.file) {
+      return res.status(400).json({ ok: false, error: "Missing file or client_id" });
+    }
+
+    const imagePath = `/uploads/${req.file.filename}`;
+    const ts = new Date().toISOString();
+
+    const messageId = await new Promise((resolve, reject) => {
+      db.run(
+        `INSERT INTO messages
+         (client_id, sender, image_url, direction, timestamp, external_id, user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [clientId, sender, imagePath, "outbound", ts, null, userId],
+        function (err) {
+          if (err) return reject(err);
+          resolve(this.lastID);
+        }
+      );
+    });
+
+    db.run(
+      `UPDATE clients SET last_message_at = ?, last_message_text = ? WHERE id = ?`,
+      [ts, "[Image]", clientId]
+    );
+
+    const payload = {
+      id: messageId,
+      client_id: clientId,
+      sender,
+      image_url: imagePath,
+      direction: "outbound",
+      timestamp: ts,
+      user_id: userId,
+    };
+
+    if (req.io) {
+      req.io.emit("newMessage", payload);
+      req.io.emit("message", payload);
+    }
+
+    return res.json({ ok: true, id: messageId, image_url: imagePath });
+  } catch (err) {
+    console.error("❌ Image upload failed:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+
