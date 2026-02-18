@@ -88,7 +88,7 @@ app.use("/api/clients", requireAuth, clientRoutes);
 app.use("/api/statuses", requireAuth, statusRoutes);
 app.use("/api/templates", requireAuth, templateRoutes);
 app.use("/api/scheduled_messages", requireAuth, scheduledMessagesRoutes);
-
+app.use("/api/media", require("./routes/media"));
 // 🌐 Webhooks (NO AUTH)
 app.use("/api/twilio", twilioRoutes);
 app.use("/api/sheets", sheetsWebhookRoutes);
@@ -108,5 +108,6 @@ server.listen(PORT, () => {
   console.log(`🚀 Server listening on port ${PORT}`);
   startScheduler(io); // start AFTER server is ready
 });
+
 
 
