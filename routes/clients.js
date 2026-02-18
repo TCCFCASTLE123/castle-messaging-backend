@@ -163,16 +163,21 @@ router.patch("/:id", (req, res) => {
             clear();
             if (fErr) return res.status(500).json({ error: "Reload failed" });
 
-            if (
-              body.status_id !== undefined &&
-              Number(oldStatusId) !== Number(merged.status_id)
-            ) {
-              try {
-                await enqueueTemplatesForClient(updatedClient);
-              } catch (e) {
-                console.error("❌ Template enqueue failed:", e.message);
-              }
-            }
+      const statusChanged =
+  body.status_id !== undefined &&
+  Number(oldStatusId) !== Number(merged.status_id);
+
+const attorneyChanged =
+  body.attorney_assigned !== undefined &&
+  body.attorney_assigned !== existing.attorney_assigned;
+
+if (statusChanged || attorneyChanged) {
+  try {
+    await enqueueTemplatesForClient(updatedClient);
+  } catch (e) {
+    console.error("❌ Template enqueue failed:", e.message);
+  }
+}
 
             res.json(updatedClient);
           }
@@ -302,4 +307,5 @@ router.delete("/:id", (req, res) => {
 });
 
 module.exports = router;
+
 
