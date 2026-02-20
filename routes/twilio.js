@@ -415,22 +415,12 @@ try {
 
 const twiml = new MessagingResponse();
 return res.status(200).send(twiml.toString());
+
+} catch (err) {
+  console.error("❌ Twilio inbound handler failed:", err);
+  const twiml = new MessagingResponse();
+  return res.status(200).send(twiml.toString());
+}
 });
 
 module.exports = router;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
