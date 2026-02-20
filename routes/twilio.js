@@ -27,7 +27,7 @@ const STAFF = {
 const STAFF_ALIASES = {
   avh: "avh",
   abby: "avh",
-  "abby heller": "agp",
+  "abby heller": "avh",
 
   cc: "cc",
   chris: "cc",
@@ -302,6 +302,8 @@ image_url: mediaUrl || null,
       req.io.emit("message", payload);
     }
 // -------------------------------------------------
+//
+    // -------------------------------------------------
 // Staff Alerts (SMS + Email)
 // -------------------------------------------------
 try {
@@ -314,7 +316,6 @@ try {
         [client_id]
       ));
 
-    // 1) Last outbound sender
     const lastOut = await dbGet(
       `SELECT user_id
        FROM messages
@@ -329,7 +330,6 @@ try {
     let staffPhone = "";
     let staffEmail = "";
 
-    // 1️⃣ Try last outbound user
     if (lastOut?.user_id) {
       const user = await dbGet(
         "SELECT username, cell_phone FROM users WHERE id = ?",
@@ -345,7 +345,6 @@ try {
       }
     }
 
-    // 2️⃣ IC fallback
     if (!staffPhone) {
       staffPhone =
         pickStaffE164FromName(routingClient?.ic) ||
@@ -360,7 +359,6 @@ try {
         "";
     }
 
-    // 3️⃣ Appt Setter fallback
     if (!staffPhone) {
       staffPhone = pickStaffE164FromName(routingClient?.appt_setter) || "";
     }
@@ -373,9 +371,7 @@ try {
     const link = baseUrl ? `${baseUrl}/inbox?clientId=${client_id}` : "";
     const preview = body.slice(0, 300);
 
-    // ----------------------------
-    // 📱 SMS ALERT (if Twilio exists)
-    // ----------------------------
+    // SMS
     if (twilioClient && staffPhone) {
       const alertText =
         `${client_name || routingClient?.name || fromCanon} sent you a text:\n\n"${preview}"` +
@@ -399,9 +395,7 @@ try {
       console.log("📱 Staff SMS alert sent:", staffPhone);
     }
 
-    // ----------------------------
-    // 📧 EMAIL ALERT (independent)
-    // ----------------------------
+    // Email
     if (staffEmail) {
       await sendEmail({
         to: staffEmail,
@@ -413,48 +407,18 @@ try {
       });
 
       console.log("📧 Staff email alert sent:", staffEmail);
-    } else {
-      console.log("📧 No email recipient found for client", client_id);
     }
   }
 } catch (notifyErr) {
   console.error("⚠️ Staff alert failed (non-fatal):", notifyErr);
 }
 
-
-
-            console.log("🔔 Staff alert sent:", {
-              client_id,
-              to: staffTo,
-              last_user_id: lastOut?.user_id || null,
-            });
-          } else {
-            console.warn("⚠️ No TWILIO_INTERNAL_FROM or TWILIO_PHONE_NUMBER set; cannot send staff alert.");
-          }
-        } else {
-          console.log("ℹ️ No staff recipient found (lastOut/IC/appt_setter).", {
-            client_id,
-            last_user_id: lastOut?.user_id || null,
-            ic: routingClient?.ic,
-            intake_coordinator: routingClient?.intake_coordinator,
-            appt_setter: routingClient?.appt_setter,
-          });
-        }
-      }
-    } catch (notifyErr) {
-      console.error("⚠️ Staff alert SMS failed (non-fatal):", notifyErr);
-    }
-
-    const twiml = new MessagingResponse();
-    return res.status(200).send(twiml.toString());
-  } catch (err) {
-    console.error("❌ Twilio inbound handler failed:", err);
-    const twiml = new MessagingResponse();
-    return res.status(200).send(twiml.toString());
-  }
+const twiml = new MessagingResponse();
+return res.status(200).send(twiml.toString());
 });
 
 module.exports = router;
+
 
 
 
