@@ -9,18 +9,15 @@ const MessagingResponse = twilio.twiml.MessagingResponse;
 // Staff routing map + helpers
 // ----------------------------
 const STAFF = {
-  agp: { name: "Ana Puig", phone: "2392183986", email: "ana@mayestelles.com" },
+  avh: { name: "Abby Heller", phone: "6232173411", email: "abby@mayestelles.com" },
+  bag: { name: "Brenda Garcia", phone: "4802215174", email: "brenda@mayestelles.com" },
   cc:  { name: "Chris Castle", phone: "8588294287", email: "chris@mayestelles.com" },
   clc: { name: "Cassandra Castle", phone: "6027960878", email: "cassandra@mayestelles.com" },
   dt:  { name: "Dean Turnbow", phone: "6026976730", email: "dean@mayestelles.com" },
-  gbc: { name: "Gabriel Cano", phone: "4807404184", email: "gcano@mayestelles.com" },
   ild: { name: "Itzayani Luque", phone: "6233135868", email: "itzy@mayestelles.com" },
   jmp: { name: "Janny Mancinas", phone: "4803528900", email: "janny@mayestelles.com" },
   jh:  { name: "Josh Hall", phone: "6024603599", email: "josh@mayestelles.com" },
   jwg: { name: "Jacob Gray", phone: "4808260509", email: "jacob@mayestelles.com" },
-  oxs: { name: "Omar Solano", phone: "8478079644", email: "omar@mayestelles.com" },
-  oac: { name: "Oscar Castellanos", phone: "5626744968", email: "oscar@mayestelles.com" },
-  nva: { name: "Nadean Accra", phone: "4807097993", email: "nadean@mayestelles.com" },
   trd: { name: "Tyler Durham", phone: "6027403867", email: "tyler@mayestelles.com" },
   rp:  { name: "Rebeca Perez", phone: "6196323950", email: "rperez@mayestelles.com" },
 };
@@ -28,9 +25,9 @@ const STAFF = {
 
 // Aliases → staff code (helps match sheet values like "Gabe", "Gabriel Cano", etc.)
 const STAFF_ALIASES = {
-  agp: "agp",
-  ana: "agp",
-  "ana puig": "agp",
+  avh: "avh",
+  abby: "avh",
+  "abby heller": "agp",
 
   cc: "cc",
   chris: "cc",
@@ -45,10 +42,9 @@ const STAFF_ALIASES = {
   dean: "dt",
   "dean turnbow": "dt",
 
-  gbc: "gbc",
-  gabe: "gbc",
-  gabriel: "gbc",
-  "gabriel cano": "gbc",
+  bag: "bag",
+  brenda: "bag",
+  "brenda garcia": "bag",
 
   ild: "ild",
   itzayani: "ild",
@@ -65,18 +61,6 @@ const STAFF_ALIASES = {
   jwg: "jwg",
   jacob: "jwg",
   "jacob gray": "jwg",
-
-  oxs: "oxs",
-  omar: "oxs",
-  "omar solano": "oxs",
-
-  oac: "oac",
-  oscar: "oac",
-  "oscar castellanos": "oac",
-
-  nva: "nva",
-  nadean: "nva",
-  "nadean accra": "nva",
 
   trd: "trd",
   tyler: "trd",
@@ -317,138 +301,126 @@ image_url: mediaUrl || null,
       req.io.emit("newMessage", payload);
       req.io.emit("message", payload);
     }
-
-    // -------------------------------------------------
-    // NEW: Staff alert SMS routing
-    // Priority: (1) last outbound sender (2) IC (3) Appt Setter
-    // -------------------------------------------------
-    try {
-      if (twilioClient && canSendAlertNow(client_id)) {
-        const routingClient =
-          clientRow ||
-          (await dbGet(
-            "SELECT id, name, phone, appt_setter, ic, intake_coordinator FROM clients WHERE id = ?",
-            [client_id]
-          ));
-
-        // 1) Last outbound sender (requires messages.user_id + users.cell_phone)
-        const lastOut = await dbGet(
-          `SELECT user_id
-           FROM messages
-           WHERE client_id = ?
-             AND direction = 'outbound'
-             AND user_id IS NOT NULL
-           ORDER BY timestamp DESC
-           LIMIT 1`,
-          [client_id]
-        );
-
-        let staffTo = "";
-
-        if (lastOut?.user_id) {
-          const user = await dbGet(
-            `SELECT id, cell_phone FROM users WHERE id = ?`,
-            [lastOut.user_id]
-          );
-          if (user?.cell_phone) {
-            staffTo = toE164US(user.cell_phone);
-          }
-        }
-
-        // 2) IC (ic or intake_coordinator)
-        if (!staffTo) {
-          staffTo =
-            pickStaffE164FromName(routingClient?.ic) ||
-            pickStaffE164FromName(routingClient?.intake_coordinator) ||
-            "";
-        }
-
-        // 3) Appt Setter
-        if (!staffTo) {
-          staffTo = pickStaffE164FromName(routingClient?.appt_setter) || "";
-        }
-
-const baseUrl = (process.env.FRONTEND_URL || "").trim().replace(/\/+$/, "");
-const link = `${baseUrl}/inbox?clientId=${client_id}`;
-
-        const preview = body.slice(0, 160);
-
-        if (staffTo) {
-          const fromInternal =
-            process.env.TWILIO_INTERNAL_FROM || process.env.TWILIO_PHONE_NUMBER || "";
-          if (fromInternal) {
-            const alertText =
-              `${(client_name || routingClient?.name || fromCanon)} sent you a text: "${preview}"` +
-              (link ? `\nOpen: ${link}` : "");
-
-const msg = {
-  to: staffTo,
-  body: alertText,
-};
-
-if (process.env.TWILIO_INTERNAL_MESSAGING_SERVICE_SID) {
-  msg.messagingServiceSid = process.env.TWILIO_INTERNAL_MESSAGING_SERVICE_SID;
-} else {
-  msg.from = process.env.TWILIO_INTERNAL_FROM || process.env.TWILIO_PHONE_NUMBER || "";
-}
-
-await twilioClient.messages.create(msg);
-            // ----------------------------
-// EMAIL ALERT (independent of SMS)
-// ----------------------------
+// -------------------------------------------------
+// Staff Alerts (SMS + Email)
+// -------------------------------------------------
 try {
-  let emailTo = null;
+  if (canSendAlertNow(client_id)) {
 
-// 1) Last outbound user
-const lastUserId = lastOut?.user_id || null;
+    const routingClient =
+      clientRow ||
+      (await dbGet(
+        "SELECT id, name, phone, appt_setter, ic, intake_coordinator FROM clients WHERE id = ?",
+        [client_id]
+      ));
 
-if (lastUserId) {
-  const user = await dbGet(
-    "SELECT username FROM users WHERE id = ?",
-    [lastUserId]
-  );
+    // 1) Last outbound sender
+    const lastOut = await dbGet(
+      `SELECT user_id
+       FROM messages
+       WHERE client_id = ?
+         AND direction = 'outbound'
+         AND user_id IS NOT NULL
+       ORDER BY timestamp DESC
+       LIMIT 1`,
+      [client_id]
+    );
 
-  emailTo = pickStaffEmailFromName(user?.username) || null;
-}
+    let staffPhone = "";
+    let staffEmail = "";
 
+    // 1️⃣ Try last outbound user
+    if (lastOut?.user_id) {
+      const user = await dbGet(
+        "SELECT username, cell_phone FROM users WHERE id = ?",
+        [lastOut.user_id]
+      );
 
-  
+      if (user?.cell_phone) {
+        staffPhone = toE164US(user.cell_phone);
+      }
 
-  // 2) IC fallback
-  if (!emailTo) {
-    emailTo =
-      pickStaffEmailFromName(routingClient?.ic) ||
-      pickStaffEmailFromName(routingClient?.intake_coordinator) ||
-      null;
-  }
+      if (user?.username) {
+        staffEmail = pickStaffEmailFromName(user.username);
+      }
+    }
 
-  // 3) Appt setter fallback
-  if (!emailTo) {
-    emailTo = pickStaffEmailFromName(routingClient?.appt_setter) || null;
-  }
+    // 2️⃣ IC fallback
+    if (!staffPhone) {
+      staffPhone =
+        pickStaffE164FromName(routingClient?.ic) ||
+        pickStaffE164FromName(routingClient?.intake_coordinator) ||
+        "";
+    }
 
-  if (emailTo) {
-    const baseUrl = process.env.FRONTEND_URL || "";
-    const link = baseUrl
-      ? `${baseUrl}/inbox?clientId=${client_id}`
-      : "(open CRM)";
+    if (!staffEmail) {
+      staffEmail =
+        pickStaffEmailFromName(routingClient?.ic) ||
+        pickStaffEmailFromName(routingClient?.intake_coordinator) ||
+        "";
+    }
 
+    // 3️⃣ Appt Setter fallback
+    if (!staffPhone) {
+      staffPhone = pickStaffE164FromName(routingClient?.appt_setter) || "";
+    }
+
+    if (!staffEmail) {
+      staffEmail = pickStaffEmailFromName(routingClient?.appt_setter) || "";
+    }
+
+    const baseUrl = (process.env.FRONTEND_URL || "").trim().replace(/\/+$/, "");
+    const link = baseUrl ? `${baseUrl}/inbox?clientId=${client_id}` : "";
     const preview = body.slice(0, 300);
 
-    await sendEmail({
-      to: emailTo,
-      subject: `New message from ${client_name || "Client"}`,
-      text:
-        `New inbound SMS from ${client_name || "Client"}:\n\n` +
-        `"${preview}"\n\n` +
-        `Open conversation:\n${link}`,
-    });
-  } else {
-    console.log("📧 No email recipient found for client", client_id);
+    // ----------------------------
+    // 📱 SMS ALERT (if Twilio exists)
+    // ----------------------------
+    if (twilioClient && staffPhone) {
+      const alertText =
+        `${client_name || routingClient?.name || fromCanon} sent you a text:\n\n"${preview}"` +
+        (link ? `\n\nOpen: ${link}` : "");
+
+      const msg = {
+        to: staffPhone,
+        body: alertText,
+      };
+
+      if (process.env.TWILIO_INTERNAL_MESSAGING_SERVICE_SID) {
+        msg.messagingServiceSid = process.env.TWILIO_INTERNAL_MESSAGING_SERVICE_SID;
+      } else {
+        msg.from =
+          process.env.TWILIO_INTERNAL_FROM ||
+          process.env.TWILIO_PHONE_NUMBER ||
+          "";
+      }
+
+      await twilioClient.messages.create(msg);
+      console.log("📱 Staff SMS alert sent:", staffPhone);
+    }
+
+    // ----------------------------
+    // 📧 EMAIL ALERT (independent)
+    // ----------------------------
+    if (staffEmail) {
+      await sendEmail({
+        to: staffEmail,
+        subject: `New message from ${client_name || "Client"}`,
+        text:
+          `New inbound SMS from ${client_name || "Client"}:\n\n` +
+          `"${preview}"\n\n` +
+          `Open conversation:\n${link || "(open CRM)"}`,
+      });
+
+      console.log("📧 Staff email alert sent:", staffEmail);
+    } else {
+      console.log("📧 No email recipient found for client", client_id);
+    }
   }
-} catch (emailErr) {
-  console.error("❌ Email alert failed:", emailErr.message);
+} catch (notifyErr) {
+  console.error("⚠️ Staff alert failed (non-fatal):", notifyErr);
 }
+
 
 
             console.log("🔔 Staff alert sent:", {
@@ -483,6 +455,7 @@ if (lastUserId) {
 });
 
 module.exports = router;
+
 
 
 
