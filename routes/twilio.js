@@ -9,7 +9,9 @@ const MessagingResponse = twilio.twiml.MessagingResponse;
 // Staff routing map + helpers
 // ----------------------------
 const STAFF = {
-  avh: { name: "Abby Heller", phone: "6232173411", email: "abby@mayestelles.com" },
+  aac:  { name: "Anahi Ayala", phone: "4808090235", email: "anahi@mayestelles.com" },
+  afl:  { name: "Angel Lucero", phone: "6023269485", email: "angel@mayestelles.com" },
+  bgl: { name: "Brianna Lopez", phone: "6023399925", email: "brianna@mayestelles.com" },
   bag: { name: "Brenda Garcia", phone: "4802215174", email: "brenda@mayestelles.com" },
   cc:  { name: "Chris Castle", phone: "8588294287", email: "chris@mayestelles.com" },
   clc: { name: "Cassandra Castle", phone: "6027960878", email: "cassandra@mayestelles.com" },
@@ -25,9 +27,21 @@ const STAFF = {
 
 // Aliases → staff code (helps match sheet values like "Gabe", "Gabriel Cano", etc.)
 const STAFF_ALIASES = {
-  avh: "avh",
-  abby: "avh",
-  "abby heller": "avh",
+  aac: "aac",
+  anahi: "aac",
+  "anahi ayala": "aac",
+   
+  afl: "afl",
+  angel: "afl",
+  "angel lucero": "afl",
+
+  bgl: "bgl",
+  brianna: "bgl;",
+  "brianna lopez": "bgl",
+
+  bag: "bag",
+  brenda: "bag",
+  "brenda garcia": "bag",
 
   cc: "cc",
   chris: "cc",
@@ -41,11 +55,7 @@ const STAFF_ALIASES = {
   dt: "dt",
   dean: "dt",
   "dean turnbow": "dt",
-
-  bag: "bag",
-  brenda: "bag",
-  "brenda garcia": "bag",
-
+  
   ild: "ild",
   itzayani: "ild",
   "itzayani luque": "ild",
