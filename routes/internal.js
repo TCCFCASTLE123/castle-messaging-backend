@@ -147,22 +147,27 @@ router.post("/send-sms", requireInternalKey, async (req, res) => {
 
     // 3️⃣ Emit to UI
     if (req.io) {
-      req.io.emit("newMessage", {
-        client_id: client.id,
-        client_name: client.name,
-        sender,
-        text,
-        direction: "outbound",
-        timestamp,
-        external_id: tw.sid,
-      });
+req.io.emit("newMessage", {
+  client_id: client.id,
+  client_name: client.name,
+  user: sender,
+  body: text,
+  direction: "outbound",
+  created_at: timestamp,
+  external_id: tw.sid,
+});
     }
+return res.json({
+  success: true,
+  sid: tw.sid,
+  client_id: client.id,
 
-    return res.json({
-      success: true,
-      sid: tw.sid,
-      client_id: client.id,
-    });
+  // ✅ Match CRM expectations
+  user: sender,
+  body: text,
+  created_at: timestamp,
+  direction: "outbound",
+});
   } catch (err) {
     console.error("❌ /api/internal/send-sms error:", err);
     return res.status(500).json({
