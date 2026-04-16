@@ -146,17 +146,16 @@ router.post("/send-sms", requireInternalKey, async (req, res) => {
     );
 
     // 3️⃣ Emit to UI
-    if (req.io) {
-req.io.emit("newMessage", {
-  client_id: client.id,
-  client_name: client.name,
-  user: sender,
-  body: text,
-  direction: "outbound",
-  created_at: timestamp,
-  external_id: tw.sid,
-});
-    }
+if (req.io) {
+  req.io.emit("newMessage", {
+    client_id: client.id,
+    user: sender,              // ✅ matches frontend
+    body: text,                // ✅ matches frontend
+    direction: "outbound",
+    created_at: timestamp,     // ✅ matches frontend
+    external_id: tw.sid,
+  });
+}
 return res.json({
   success: true,
   sid: tw.sid,
