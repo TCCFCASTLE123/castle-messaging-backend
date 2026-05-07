@@ -12,7 +12,6 @@ const STAFF = {
   aac:  { name: "Anahi Ayala", phone: "4808090235", email: "anahi@mayestelles.com" },
   afl:  { name: "Angel Lucero", phone: "6023269485", email: "angel@mayestelles.com" },
   bgl: { name: "Brianna Lopez", phone: "6023399925", email: "brianna@mayestelles.com" },
-  bag: { name: "Brenda Garcia", phone: "4802215174", email: "brenda@mayestelles.com" },
   cc:  { name: "Chris Castle", phone: "8588294287", email: "chris@mayestelles.com" },
   clc: { name: "Cassandra Castle", phone: "6027960878", email: "cassandra@mayestelles.com" },
   dt:  { name: "Dean Turnbow", phone: "6026976730", email: "dean@mayestelles.com" },
@@ -39,11 +38,8 @@ const STAFF_ALIASES = {
   brianna: "bgl;",
   "brianna lopez": "bgl",
 
-  bag: "bag",
-  brenda: "bag",
-  "brenda garcia": "bag",
-
-  cc: "cc",
+  
+cc: "cc",
   chris: "cc",
   "chris castle": "cc",
 
