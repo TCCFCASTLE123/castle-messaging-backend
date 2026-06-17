@@ -11,6 +11,7 @@ const MessagingResponse = twilio.twiml.MessagingResponse;
 const STAFF = {
   aac:  { name: "Anahi Ayala", phone: "4808090235", email: "anahi@mayestelles.com" },
   afl:  { name: "Angel Lucero", phone: "6023269485", email: "angel@mayestelles.com" },
+  mc: { name: "Marti Castle", phone: "6232561646", email: "marti@mayestelles.com" },
   bgl: { name: "Brianna Lopez", phone: "6023399925", email: "brianna@mayestelles.com" },
   cc:  { name: "Chris Castle", phone: "8588294287", email: "chris@mayestelles.com" },
   clc: { name: "Cassandra Castle", phone: "6027960878", email: "cassandra@mayestelles.com" },
@@ -38,7 +39,9 @@ const STAFF_ALIASES = {
   brianna: "bgl;",
   "brianna lopez": "bgl",
 
-  
+    mc: "mc",
+  marti: "marti",
+ "marti castle": "mc",
 cc: "cc",
   chris: "cc",
   "chris castle": "cc",
