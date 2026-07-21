@@ -10,7 +10,6 @@ const MessagingResponse = twilio.twiml.MessagingResponse;
 // ----------------------------
 const STAFF = {
   aac:  { name: "Anahi Ayala", phone: "4808090235", email: "anahi@mayestelles.com" },
-  afl:  { name: "Angel Lucero", phone: "6023269485", email: "alucero@mayestelles.com" },
   mc: { name: "Marti Castle", phone: "6232561646", email: "marti@mayestelles.com" },
   bgl: { name: "Brianna Lopez", phone: "6023399925", email: "brianna@mayestelles.com" },
   cc:  { name: "Chris Castle", phone: "8588294287", email: "chris@mayestelles.com" },
@@ -31,10 +30,6 @@ const STAFF_ALIASES = {
   anahi: "aac",
   "anahi ayala": "aac",
    
-  afl: "afl",
-  angel: "afl",
-  "angel lucero": "afl",
-
   bgl: "bgl",
   brianna: "bgl;",
   "brianna lopez": "bgl",
