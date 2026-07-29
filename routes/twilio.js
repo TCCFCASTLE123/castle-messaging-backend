@@ -18,7 +18,6 @@ const STAFF = {
   ild: { name: "Itzayani Luque", phone: "6233135868", email: "itzy@mayestelles.com" },
   jmp: { name: "Janny Mancinas", phone: "4803528900", email: "janny@mayestelles.com" },
   jh:  { name: "Josh Hall", phone: "6024603599", email: "josh@mayestelles.com" },
-  jwg: { name: "Jacob Gray", phone: "4808260509", email: "jacob@mayestelles.com" },
   trd: { name: "Tyler Durham", phone: "6027403867", email: "tyler@mayestelles.com" },
   rp:  { name: "Rebeca Perez", phone: "6196323950", email: "rperez@mayestelles.com" },
 };
@@ -61,10 +60,6 @@ cc: "cc",
   jh: "jh",
   josh: "jh",
   "josh hall": "jh",
-
-  jwg: "jwg",
-  jacob: "jwg",
-  "jacob gray": "jwg",
 
   trd: "trd",
   tyler: "trd",
