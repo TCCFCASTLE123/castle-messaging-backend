@@ -19,6 +19,7 @@ const STAFF = {
   jmp: { name: "Janny Mancinas", phone: "4803528900", email: "janny@mayestelles.com" },
   jh:  { name: "Josh Hall", phone: "6024603599", email: "josh@mayestelles.com" },
   trd: { name: "Tyler Durham", phone: "6027403867", email: "tyler@mayestelles.com" },
+  rwr: { name: "Rick Rathke", phone: "4807105237", email: "rick@mayestelles.com" },
   rp:  { name: "Rebeca Perez", phone: "6196323950", email: "rperez@mayestelles.com" },
 };
 
@@ -36,7 +37,8 @@ const STAFF_ALIASES = {
     mc: "mc",
   marti: "marti",
  "marti castle": "mc",
-cc: "cc",
+
+  cc: "cc",
   chris: "cc",
   "chris castle": "cc",
 
@@ -64,7 +66,11 @@ cc: "cc",
   trd: "trd",
   tyler: "trd",
   "tyler durham": "trd",
-
+  
+  rwr: "rwr",
+  rick: "rwr",
+  "rick rathke": "rwr",
+ 
   rp: "rp",
   rebeca: "rp",
   "rebeca perez": "rp",
