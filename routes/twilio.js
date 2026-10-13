@@ -20,7 +20,7 @@ const STAFF = {
   jmp: { name: "Janny Mancinas", phone: "4803528900", email: "janny@mayestelles.com" },
   jh:  { name: "Josh Hall", phone: "6024603599", email: "josh@mayestelles.com" },
   trd: { name: "Tyler Durham", phone: "6027403867", email: "tyler@mayestelles.com" },
-  rwr: { name: "Rick Rathke", phone: "4807105237", email: "rick@mayestelles.com" },
+  teb: { name: "Tyler Baldwin", phone: "6023492232", email: "tbaldwin@mayestelles.com" },
   rp:  { name: "Rebeca Perez", phone: "6196323950", email: "rperez@mayestelles.com" },
 };
 
@@ -72,9 +72,9 @@ const STAFF_ALIASES = {
   tyler: "trd",
   "tyler durham": "trd",
   
-  rwr: "rwr",
-  rick: "rwr",
-  "rick rathke": "rwr",
+  teb: "teb",
+  tylerb: "teb",
+  "tyler baldwin": "teb",
  
   rp: "rp",
   rebeca: "rp",
