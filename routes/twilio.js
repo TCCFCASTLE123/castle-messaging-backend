@@ -11,10 +11,8 @@ const MessagingResponse = twilio.twiml.MessagingResponse;
 const STAFF = {
   aac:  { name: "Anahi Ayala", phone: "4808090235", email: "anahi@mayestelles.com" },
   mc: { name: "Marti Castle", phone: "6232561646", email: "marti@mayestelles.com" },
-  bgl: { name: "Brianna Lopez", phone: "6023399925", email: "brianna@mayestelles.com" },
   cc:  { name: "Chris Castle", phone: "8588294287", email: "chris@mayestelles.com" },
   clc: { name: "Cassandra Castle", phone: "6027960878", email: "cassandra@mayestelles.com" },
-  dlb:  { name: "Dyandra Brown", phone: "4806457563", email: "dyandra@mayestelles.com" },
   dt:  { name: "Dean Turnbow", phone: "6026976730", email: "dean@mayestelles.com" },
   ild: { name: "Itzayani Luque", phone: "6233135868", email: "itzy@mayestelles.com" },
   jmp: { name: "Janny Mancinas", phone: "4803528900", email: "janny@mayestelles.com" },
@@ -30,10 +28,7 @@ const STAFF_ALIASES = {
   aac: "aac",
   anahi: "aac",
   "anahi ayala": "aac",
-   
-  bgl: "bgl",
-  brianna: "bgl;",
-  "brianna lopez": "bgl",
+
 
     mc: "mc",
   marti: "marti",
@@ -47,10 +42,7 @@ const STAFF_ALIASES = {
   cass: "clc",
   cassandra: "clc",
   "cassandra castle": "clc",
- 
-  dlb: "dlb",
-  dyandra: "dlb",
-  "dyandra brown": "dlb",
+
   
   dt: "dt",
   dean: "dt",
