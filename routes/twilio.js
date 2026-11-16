@@ -21,6 +21,8 @@ const STAFF = {
   teb: { name: "Tyler Baldwin", phone: "6023492232", email: "tbaldwin@mayestelles.com" },
   rp:  { name: "Rebeca Perez", phone: "6196323950", email: "rperez@mayestelles.com" },
   rdp: { name: "Robert Diaz", phone: "7029008155", email: "robert@mayestelles.com" },
+  bgl: { name: "Brianna Lopez", phone: "6023399925", email: "brianna@mayestelles.com" },
+  rdp: { name: "Michael Easton", phone: "6025075837", email: "measton@mayestelles.com" },
 };
 
 
@@ -76,6 +78,12 @@ const STAFF_ALIASES = {
     rdp: "rdp",
   robert: "rdp",
   "robert diaz": "rdp",
+  bgl: "bgl",
+  brianna: "bgl",
+  "brianna lopez": "bgl",
+  meq: "meq",
+  michael: "meq",
+  "michael easton": "meq",
 };
 
 function normalizeName(s) {
